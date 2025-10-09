@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Do not create additional scripts unless necessary because it will mess everything up.

@@ -1,0 +1,81 @@
+# Entorno virtual
+venv/
+.venv/
+.env
+
+# Archivos de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.csv
+
+# Configuración de IDEs y editores
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Logs y archivos de registro
+*.log
+.log
+feature_engineering.log
+
+# Bases de datos temporales
+*.sqlite3
+*.db
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Dependencias instaladas
+Pipfile.lock
+poetry.lock
+
+# Docker
+*.env.*.local
+docker-compose.override.yml
+
+# Uvicorn/autoreload
+*.reload
+
+# Coverage reports
+htmlcov/
+.coverage
+
+# Unit test / coverage reports
+reports/
+junit-*.xml
+
+# Dist / build
+dist/
+build/
+*.egg-info/
+
+# Cachés
+.cache/
+catboost_info
+
+# Archivos de datos y modelos
+model_data
+trained_models
+*.joblib
+*.pkl
+
+# Archivos de salida y resultados
+analysis_output
+results/
+plots/
+logs/
+json/
+
+# Archivos de datos
+*.json
+*.pdf
+*.png
+*.html
+
+# Carpeta de datos de NBA
+app/architectures/basketball/data/

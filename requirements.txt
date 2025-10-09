@@ -1,0 +1,47 @@
+fastapi           # Framework web moderno y de alto rendimiento; genera docs OpenAPI automáticamente
+uvicorn[standard]  # Servidor ASGI rápido para correr FastAPI (incluye uvloop y httptools)
+pydantic          # Validación y parsing de datos con esquemas basados en typing
+pydantic-settings  # Configuraciones basadas en Pydantic (antes parte de pydantic core)
+python-dotenv     # Carga variables de entorno desde un .env al iniciar la app
+python-multipart  # Para manejo de formularios y archivos
+
+# Librerías básicas de datos y computación
+numpy
+pandas
+python-dateutil
+pydantic
+seaborn
+
+# Machine Learning y Deep Learning (IA)
+scikit-learn
+torch
+xgboost
+lightgbm
+catboost
+optuna
+scikit-optimize
+shap
+
+# Visualización
+matplotlib
+seaborn
+plotly
+
+# Jupyter y notebooks
+jupyter
+ipywidgets
+nbformat
+kaleido
+
+# Utilidades y herramientas
+tqdm
+joblib
+requests
+python-dotenv
+
+# Graph Neural Networks (Deep Learning - IA )(Opcional - Futuro)
+# Implementado en app\architectures\basketball\src\models\players\ast\dl_ast
+torch-geometric
+
+# Procesamiento de datos adicional
+scipy 

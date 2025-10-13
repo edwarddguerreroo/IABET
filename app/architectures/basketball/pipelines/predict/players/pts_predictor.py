@@ -61,7 +61,10 @@ class PTSPredictor:
         self.common_utils = CommonUtils()
         self.confidence_calculator = PlayersConfidence()
         self.is_loaded = False
-        self.tolerance = 0  # Tolerancia optimista individual
+        self.tolerance = -2  # Tolerancia optimista individual
+        
+        # Cargar datos y modelo automáticamente
+        self.load_data_and_model()
     
     def load_data_and_model(self) -> bool:
         """
@@ -321,7 +324,7 @@ class PTSPredictor:
                 game_data=game_data  # Datos en tiempo real
             )
             
-            # APLICAR FACTOR H2H A LA PREDICCIÓN
+            # APLICAR FACTOR H2H A LA PREDICCIÓN CON LÍMITE REALISTA
             h2h_factor = h2h_stats.get('h2h_factor', 1.0)
             if h2h_factor != 1.0 and h2h_stats.get('games_found', 0) >= 3:
                 # Si hay suficientes datos H2H, aplicar el factor
@@ -329,6 +332,27 @@ class PTSPredictor:
                 logger.info(f"🎯 Aplicando factor H2H {h2h_factor:.3f} a predicción: {raw_prediction:.1f} -> {raw_prediction_adjusted:.1f}")
             else:
                 raw_prediction_adjusted = raw_prediction
+            
+            # LÍMITE REALISTA BASADO EN HISTÓRICO DEL JUGADOR
+            # Evitar predicciones excesivamente altas para jugadores específicos
+            historical_mean = actual_stats_mean
+            historical_std = actual_stats_std
+            
+            # Límite máximo basado en percentil 95 del histórico del jugador
+            max_realistic = historical_mean + (2 * historical_std)  # ~95% de los juegos históricos
+            
+            # Aplicar límite más conservador para jugadores elite
+            if historical_mean >= 20:  # Jugadores elite (20+ pts promedio)
+                max_realistic = min(max_realistic, historical_mean + (0.8 * historical_std))  # Más conservador
+            
+            # Aplicar límite absoluto máximo
+            max_realistic = min(max_realistic, 45)  # Límite absoluto NBA moderno
+            
+            logger.info(f"🎯 Límite realista calculado para {player_name}: {max_realistic:.1f} pts (histórico: {historical_mean:.1f}±{historical_std:.1f})")
+            
+            if raw_prediction_adjusted > max_realistic:
+                logger.info(f"🎯 Limitando predicción de {raw_prediction_adjusted:.1f} a {max_realistic:.1f} (basado en histórico)")
+                raw_prediction_adjusted = max_realistic
             
             # APLICAR TOLERANCIA INDIVIDUAL DEL PREDICTOR
             pts_prediction = max(0, raw_prediction_adjusted + self.tolerance)  # No permitir valores negativos
@@ -426,73 +450,73 @@ def test_pts_predictor():
     # Prueba con datos simulados de SportRadar
     print("\n🎯 Prueba con datos simulados de SportRadar:")
     
-    # Simular datos de SportRadar con Shai Gilgeous-Alexander (elite)
+    # Simular datos de SportRadar con Denver vs Orlando Magic
     mock_sportradar_game = {
         "gameId": "sr:match:12345",
         "scheduled": "2024-01-15T20:00:00Z",
         "status": "scheduled",
         "homeTeam": {
-            "name": "Oklahoma City Thunder",
-            "alias": "OKC",
+            "name": "Denver Nuggets",
+            "alias": "DEN",
             "players": [
                 {
-                    "playerId": "sr:player:123",
-                    "fullName": "Shai Gilgeous-Alexander",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "2",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:999",
-                    "fullName": "Chet Holmgren",
+                    "playerId": "sr:player:jokic",
+                    "fullName": "Nikola Jokic",
                     "position": "C",
                     "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "7",
+                    "jerseyNumber": "15",
                     "injuries": []
                 },
                 {
-                    "playerId": "sr:player:777",
-                    "fullName": "Isaiah Joe",
+                    "playerId": "sr:player:murray",
+                    "fullName": "Jamal Murray",
                     "position": "G",
-                    "starter": False,
+                    "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "11",
+                    "jerseyNumber": "27",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:porter",
+                    "fullName": "Michael Porter Jr.",
+                    "position": "F",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "1",
                     "injuries": []
                 }
             ]
         },
         "awayTeam": {
-            "name": "Dallas Mavericks", 
-            "alias": "DAL",
+            "name": "Orlando Magic", 
+            "alias": "ORL",
             "players": [
                 {
-                    "playerId": "sr:player:456",
-                    "fullName": "Luka Dončić",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "77",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:789",
-                    "fullName": "Kyrie Irving",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "11",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:888",
-                    "fullName": "P.J. Washington",
+                    "playerId": "sr:player:banchero",
+                    "fullName": "Paolo Banchero",
                     "position": "F",
-                    "starter": False,
+                    "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "25",
+                    "jerseyNumber": "5",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:wagner",
+                    "fullName": "Franz Wagner",
+                    "position": "F",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "22",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:suggs",
+                    "fullName": "Jalen Suggs",
+                    "position": "G",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "4",
                     "injuries": []
                 }
             ]
@@ -504,10 +528,10 @@ def test_pts_predictor():
     }
     
     # Probar predicción desde SportRadar
-    print("   Prediciendo Shai Gilgeous-Alexander desde datos SportRadar:")
+    print("   Prediciendo Nikola Jokic desde datos SportRadar:")
     sportradar_result = predictor.predict_game(
         mock_sportradar_game, 
-        "Shai Gilgeous-Alexander"
+        "Nikola Jokic"
     )
     
     if sportradar_result is not None:

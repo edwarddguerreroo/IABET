@@ -40,7 +40,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(b
 sys.path.insert(0, project_root)
 sys.path.insert(0, basketball_dir)
 
-# Importar data loaders
+# Importar data loaders 
 from app.architectures.basketball.src.preprocessing.data_loader import NBADataLoader
 from app.architectures.basketball.pipelines.predict.utils_predict.game_adapter import GameDataAdapter
 from app.architectures.basketball.pipelines.predict.utils_predict.common_utils import CommonUtils

@@ -85,7 +85,7 @@ class StackingPTSModel:
     
     def __init__(self,
                  n_trials: int = 25,  # Optimización bayesiana por modelo
-                 cv_folds: int = 5,
+                 cv_folds: int = 3,
                  early_stopping_rounds: int = 30,
                  random_state: int = 42,
                  enable_gpu: bool = False,
@@ -106,7 +106,7 @@ class StackingPTSModel:
             players_quarters_df: DataFrame con datos de jugadores por cuartos
         """
         self.n_trials = n_trials
-        self.cv_folds = 3  # Reducido a 3 folds para mejor rendimiento
+        self.cv_folds = cv_folds # Reducido a 3 folds para mejor rendimiento
         self.early_stopping_rounds = early_stopping_rounds
         self.random_state = random_state
         self.enable_gpu = enable_gpu
@@ -289,7 +289,7 @@ class StackingPTSModel:
             # Crear y entrenar modelo
             model = model_config['model_class'](**params)
             
-            # Calcular pesos adaptativos
+            # Calcular pesos adaptativos - REACTIVADO CON AJUSTES SUTILES
             sample_weights = self._calculate_adaptive_weights(y_train.values)
             
             try:
@@ -352,34 +352,45 @@ class StackingPTSModel:
                 # Predecir y evaluar
                 y_pred = model.predict(X_val)
                 
-                # Calcular score con pesos adaptativos
+                # Calcular score con pesos adaptativos - REACTIVADO CON PESOS SUTILES
                 val_weights = self._calculate_adaptive_weights(y_val.values)
                 weighted_errors = np.abs(y_pred - y_val.values) * val_weights
                 weighted_mae = np.mean(weighted_errors)
                 
-                # Penalizaciones REDUCIDAS para evitar underfitting
-                high_scoring_mask = y_val.values >= 20
+                # Penalizaciones SUTILES basadas en el análisis del modelo base
+                # Sesgos identificados: +2.08 (bajos), -1.94 (altos) - Penalizaciones sutiles
+                
+                # Penalización por subestimación en rangos altos (sutil)
+                high_scoring_mask = y_val.values >= 25
                 if high_scoring_mask.sum() > 0:
                     high_scoring_errors = y_pred[high_scoring_mask] - y_val.values[high_scoring_mask]
-                    underestimation_penalty = np.mean(np.maximum(-high_scoring_errors, 0)) * 0.3  # REDUCIDO de 0.5
+                    underestimation_penalty = np.mean(np.maximum(-high_scoring_errors, 0)) * 0.1  # Penalización sutil
                 else:
                     underestimation_penalty = 0
                 
-                # Penalización por overfitting MÁS SUAVE
+                # Penalización por sobrestimación en rangos bajos (sutil)
+                low_scoring_mask = y_val.values < 10
+                if low_scoring_mask.sum() > 0:
+                    low_scoring_errors = y_val.values[low_scoring_mask] - y_pred[low_scoring_mask]
+                    overestimation_penalty = np.mean(np.maximum(low_scoring_errors, 0)) * 0.05  # Penalización mínima
+                else:
+                    overestimation_penalty = 0
+                
+                # Penalización por overfitting SUTIL
                 train_pred = model.predict(X_train_used)
                 train_mae = mean_absolute_error(y_train_used, train_pred)
-                overfitting_penalty = max(0, train_mae - weighted_mae) * 0.1  # REDUCIDO de 0.2
+                overfitting_penalty = max(0, train_mae - weighted_mae) * 0.05  # Penalización mínima
                 
-                # Penalización por complejidad MÁS SUAVE
+                # Penalización por complejidad SUTIL
                 complexity_penalty = 0
                 if 'max_depth' in params:
-                    complexity_penalty += (params['max_depth'] / 20.0) * 0.02  # REDUCIDO
+                    complexity_penalty += (params['max_depth'] / 20.0) * 0.01  # Penalización mínima
                 if 'n_estimators' in params:
-                    complexity_penalty += (params['n_estimators'] / 2000.0) * 0.02  # REDUCIDO
+                    complexity_penalty += (params['n_estimators'] / 2000.0) * 0.01  # Penalización mínima
                 elif 'max_iter' in params:
-                    complexity_penalty += (params['max_iter'] / 1000.0) * 0.02  # REDUCIDO
+                    complexity_penalty += (params['max_iter'] / 1000.0) * 0.01  # Penalización mínima
                 
-                final_score = weighted_mae + underestimation_penalty + overfitting_penalty + complexity_penalty
+                final_score = weighted_mae + underestimation_penalty + overestimation_penalty + overfitting_penalty + complexity_penalty
                 
                 return final_score
                 
@@ -461,7 +472,7 @@ class StackingPTSModel:
                     model_class = model_config['model_class']
                     model = model_class(**best_params)
                     
-                    # Calcular sample weights para este fold
+                    # Calcular sample weights para este fold - REACTIVADO CON PESOS SUTILES
                     sample_weights = self._calculate_adaptive_weights(y_fold_train.values)
                     
                     # Entrenar modelo con sample weights y early stopping
@@ -913,7 +924,7 @@ class StackingPTSModel:
         # Realizar predicciones usando stacking con out-of-fold predictions
         predictions = self._predict_with_stacking(X)
     
-        # Aplicar procesamiento robusto para puntos
+        # Aplicar procesamiento robusto para puntos - DESACTIVADO TEMPORALMENTE
         predictions = self._apply_robust_prediction_processing(predictions)
         
         return predictions
@@ -959,6 +970,33 @@ class StackingPTSModel:
             # Solo limitar el límite superior para casos extremos
             lower_bound = 0  # Permitir predicciones bajas (jugadores de rol)
             upper_bound = min(60, Q3 + outlier_factor * IQR)  # Máximo realista: 60 puntos
+            
+            # CORRECCIONES SUTILES POR RANGO basadas en el análisis del modelo base
+            # Sesgos identificados: +2.08 (bajos), -1.94 (altos) - Corrección sutil
+            
+            # Rangos bajos: Reducir sobrestimación (factores sutiles)
+            mask_suplentes = predictions < 5
+            predictions[mask_suplentes] *= 0.9  # Reducción sutil
+            
+            mask_rotacion = (predictions >= 5) & (predictions < 10)
+            predictions[mask_rotacion] *= 0.95  # Reducción mínima
+            
+            # Rangos medios: Sin corrección (ya están equilibrados)
+            mask_importantes = (predictions >= 10) & (predictions < 15)
+            # Sin corrección para rangos medios
+            
+            # Rangos altos: Aumentar para reducir subestimación (factores sutiles)
+            mask_estrellas = (predictions >= 20) & (predictions < 25)
+            predictions[mask_estrellas] *= 1.02  # Aumento mínimo
+            
+            mask_superestrellas = (predictions >= 25) & (predictions < 30)
+            predictions[mask_superestrellas] *= 1.03  # Aumento sutil
+            
+            mask_elite = (predictions >= 30) & (predictions < 40)
+            predictions[mask_elite] *= 1.05  # Aumento moderado
+            
+            mask_historico = predictions >= 40
+            predictions[mask_historico] *= 1.08  # Aumento moderado
             
             # Solo aplicar winsorización al límite superior, no al inferior
             predictions = np.clip(predictions, lower_bound, upper_bound)
@@ -1066,39 +1104,33 @@ class StackingPTSModel:
     
     def _calculate_adaptive_weights(self, y_true: np.ndarray) -> np.ndarray:
         """
-        Calcula pesos adaptativos BALANCEADOS basados en el rango de puntos.
-        Pesos moderados para evitar underfitting mientras se enfoca en alto scoring. (Elite range)
+        Calcula pesos adaptativos SUTILES basados en el análisis del modelo base.
+        Sesgos identificados: +2.08 (bajos), -1.94 (altos) - Corrección sutil.
         
         Args:
             y_true: Valores reales de puntos
             
         Returns:
-            np.ndarray: Pesos adaptativos para cada muestra
+            np.ndarray: Pesos adaptativos sutiles para cada muestra
         """
         weights = np.ones_like(y_true, dtype=float)
         
-
-        weights = np.where(y_true >= 30, 5.5, weights)      # Elite performances (REDUCIDO de 7.0)
-        weights = np.where((y_true >= 25) & (y_true < 30), 4.0, weights)  # Superstars (REDUCIDO de 5.0)
-        weights = np.where((y_true >= 20) & (y_true < 25), 2.8, weights)  # Stars (REDUCIDO de 3.5)
-        weights = np.where((y_true >= 15) & (y_true < 20), 2.0, weights)  # Key players (REDUCIDO de 2.5)
-        weights = np.where((y_true >= 10) & (y_true < 15), 1.5, weights)  # Important players (REDUCIDO de 1.8)
-        weights = np.where((y_true >= 5) & (y_true < 10), 1.2, weights)   # Rotation players (REDUCIDO de 1.3)
+        # PESOS SUTILES basados en el análisis del modelo base
+        # Sesgo identificado: sobrestimación en bajos (+2.08), subestimación en altos (-1.94)
         
-        # Peso adicional para casos extremos MODERADO (40+ puntos)
-        weights = np.where(y_true >= 40, 7.0, weights)  # REDUCIDO de 10.0
+        # Rangos bajos: Más peso para reducir sobrestimación (sutil)
+        weights = np.where((y_true >= 0) & (y_true < 5), 1.3, weights)   # Suplentes: peso sutil
+        weights = np.where((y_true >= 5) & (y_true < 10), 1.2, weights)   # Rotación: peso sutil
         
-        # Solo mostrar estadísticas en modo debug si es necesario
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Pesos adaptativos BALANCEADOS calculados - Distribución:")
-            logger.debug(f"  Peso 1.0 (0-5pts): {np.sum(weights == 1.0)} muestras")
-            logger.debug(f"  Peso 1.2 (5-10pts): {np.sum(weights == 1.2)} muestras")
-            logger.debug(f"  Peso 1.5 (10-15pts): {np.sum(weights == 1.5)} muestras")
-            logger.debug(f"  Peso 2.0 (15-20pts): {np.sum(weights == 2.0)} muestras")
-            logger.debug(f"  Peso 2.8 (20-25pts): {np.sum(weights == 2.8)} muestras")
-            logger.debug(f"  Peso 4.0 (25-30pts): {np.sum(weights == 4.0)} muestras")
-            logger.debug(f"  Peso 5.5 (30-40pts): {np.sum((weights == 5.5) & (y_true < 40))} muestras")
-            logger.debug(f"  Peso 7.0 (40+pts): {np.sum(weights == 7.0)} muestras")
+        # Rangos medios: Peso normal (ya están equilibrados)
+        weights = np.where((y_true >= 10) & (y_true < 15), 1.1, weights)   # Importantes: peso mínimo
+        weights = np.where((y_true >= 15) & (y_true < 20), 1.0, weights)  # Clave: peso normal
+        
+        # Rangos altos: Más peso para reducir subestimación (sutil)
+        weights = np.where((y_true >= 20) & (y_true < 25), 1.2, weights)    # Estrellas: peso sutil
+        weights = np.where((y_true >= 25) & (y_true < 30), 1.4, weights)    # Superestrellas: peso moderado
+        weights = np.where((y_true >= 30) & (y_true < 40), 1.6, weights)    # Élite: peso moderado
+        weights = np.where(y_true >= 40, 1.8, weights)                      # Histórico: peso moderado
         
         return weights
 
@@ -1355,7 +1387,6 @@ class XGBoostPTSModel(StackingPTSModel):
                 n_jobs=1,
                 passthrough=True
             )
-            logger.info("✅ StackingRegressor creado para compatibilidad con predictor")
         
         # Calcular y guardar cutoff_date para compatibilidad con trainer
         if 'Date' in df.columns:

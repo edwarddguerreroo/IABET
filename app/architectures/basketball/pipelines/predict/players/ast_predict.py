@@ -70,7 +70,10 @@ class ASTPredictor:
         self.common_utils = CommonUtils()
         self.confidence_calculator = PlayersConfidence()
         self.is_loaded = False
-        self.tolerance = -2  # Tolerancia conservadora individual
+        self.tolerance = -1  # Tolerancia conservadora individual
+
+        # Cargar datos y modelo automáticamente
+        self.load_data_and_model()
     
     def load_data_and_model(self) -> bool:
         """
@@ -424,79 +427,81 @@ def test_ast_predictor():
     # Prueba con datos simulados de SportRadar
     print("\n🎯 Prueba con datos simulados de SportRadar:")
     
-    # Simular datos de SportRadar con Trae Young (elite)
+    # Simular datos de SportRadar con Nikola Jokić (Denver Nuggets)
     mock_sportradar_game = {
         "gameId": "sr:match:12345",
         "scheduled": "2024-01-15T20:00:00Z",
         "status": "scheduled",
         "homeTeam": {
-            "name": "Atlanta Hawks",
-            "alias": "ATL",
+            "name": "Oklahoma City Thunder",
+            "alias": "OKC",
             "players": [
                 {
                     "playerId": "sr:player:123",
-                    "fullName": "Trae Young",
+                    "fullName": "Shai Gilgeous-Alexander",
                     "position": "G",
                     "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "11",
+                    "jerseyNumber": "2",
                     "injuries": []
                 },
                 {
                     "playerId": "sr:player:999",
-                    "fullName": "John Collins",
-                    "position": "F",
+                    "fullName": "Chet Holmgren",
+                    "position": "C",
                     "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "20",
+                    "jerseyNumber": "7",
                     "injuries": []
                 }
             ]
         },
         "awayTeam": {
-            "name": "Charlotte Hornets", 
-            "alias": "CHA",
+            "name": "Denver Nuggets", 
+            "alias": "DEN",
             "players": [
                 {
                     "playerId": "sr:player:456",
-                    "fullName": "LaMelo Ball",
-                    "position": "G",
+                    "fullName": "Nikola Jokić",
+                    "position": "C",
                     "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "1",
+                    "jerseyNumber": "15",
                     "injuries": []
                 },
                 {
                     "playerId": "sr:player:789",
-                    "fullName": "Terry Rozier",
+                    "fullName": "Jamal Murray",
                     "position": "G",
                     "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "3",
+                    "jerseyNumber": "27",
                     "injuries": []
                 },
                 {
                     "playerId": "sr:player:888",
-                    "fullName": "P.J. Washington",
+                    "fullName": "Michael Porter Jr.",
                     "position": "F",
-                    "starter": False,
+                    "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "25",
+                    "jerseyNumber": "1",
                     "injuries": []
                 }
             ]
         },
         "venue": {
-            "name": "State Farm Arena",
+            "name": "Paycom Center",
+            "city": "Oklahoma City",
+            "state": "OK",
             "capacity": 18118
         }
     }
     
     # Probar predicción desde SportRadar
-    print("   Prediciendo Trae Young desde datos SportRadar:")
+    print("   Prediciendo Nikola Jokić desde datos SportRadar:")
     sportradar_result = predictor.predict_game(
         mock_sportradar_game, 
-        "Trae Young"
+        "Nikola Jokić"
     )
     
     if sportradar_result is not None and 'error' not in sportradar_result:
@@ -527,57 +532,57 @@ def test_ast_predictor():
     # Probar búsqueda inteligente con nombres problemáticos
     print("\n🧠 Pruebas de búsqueda inteligente:")
     
-    # Caso 1: Jugador elite (Trae Young)
-    print("   1. Búsqueda sin acento: 'Trae Young' -> 'Trae Young'")
-    trae_result = predictor.predict_game(mock_sportradar_game, "Trae Young")
-    if trae_result is not None and 'error' not in trae_result:
-        print(f"      ✅ Encontrado: {trae_result['target_name']} -> bet_line: {trae_result['bet_line']}")
-    elif trae_result is None:
+    # Caso 1: Jugador elite (Nikola Jokić)
+    print("   1. Búsqueda sin acento: 'Nikola Jokić' -> 'Nikola Jokic'")
+    jokic_result = predictor.predict_game(mock_sportradar_game, "Nikola Jokić")
+    if jokic_result is not None and 'error' not in jokic_result:
+        print(f"      ✅ Encontrado: {jokic_result['target_name']} -> bet_line: {jokic_result['bet_line']}")
+    elif jokic_result is None:
         print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
     else:
-        print(f"      ❌ Error: {trae_result['error']}")
+        print(f"      ❌ Error: {jokic_result['error']}")
     
-    # Caso 2: Jugador elite (LaMelo Ball)
-    print("   2. Búsqueda sin acento: 'LaMelo Ball' -> 'LaMelo Ball'")
-    lamelo_result = predictor.predict_game(mock_sportradar_game, "LaMelo Ball")
-    if lamelo_result is not None and 'error' not in lamelo_result:
-        print(f"      ✅ Encontrado: {lamelo_result['target_name']} -> bet_line: {lamelo_result['bet_line']}")
-    elif lamelo_result is None:
+    # Caso 2: Jugador elite (Jamal Murray)
+    print("   2. Búsqueda sin acento: 'Jamal Murray' -> 'Jamal Murray'")
+    murray_result = predictor.predict_game(mock_sportradar_game, "Jamal Murray")
+    if murray_result is not None and 'error' not in murray_result:
+        print(f"      ✅ Encontrado: {murray_result['target_name']} -> bet_line: {murray_result['bet_line']}")
+    elif murray_result is None:
         print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
     else:
-        print(f"      ❌ Error: {lamelo_result['error']}")
+        print(f"      ❌ Error: {murray_result['error']}")
     
     # Caso 3: Búsqueda case-insensitive
-    print("   3. Búsqueda case-insensitive: 'trae young'")
-    trae_lower_result = predictor.predict_game(mock_sportradar_game, "trae young")
-    if trae_lower_result is not None and 'error' not in trae_lower_result:
-        print(f"      ✅ Encontrado: {trae_lower_result['target_name']} -> bet_line: {trae_lower_result['bet_line']}")
-    elif trae_lower_result is None:
+    print("   3. Búsqueda case-insensitive: 'nikola jokic'")
+    jokic_lower_result = predictor.predict_game(mock_sportradar_game, "nikola jokic")
+    if jokic_lower_result is not None and 'error' not in jokic_lower_result:
+        print(f"      ✅ Encontrado: {jokic_lower_result['target_name']} -> bet_line: {jokic_lower_result['bet_line']}")
+    elif jokic_lower_result is None:
         print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
     else:
-        print(f"      ❌ Error: {trae_lower_result['error']}")
+        print(f"      ❌ Error: {jokic_lower_result['error']}")
     
     # Caso 4: Búsqueda parcial (solo apellido)
-    print("   4. Búsqueda parcial: 'Young'")
-    young_partial_result = predictor.predict_game(mock_sportradar_game, "Young")
-    if young_partial_result is not None and 'error' not in young_partial_result:
-        print(f"      ✅ Encontrado: {young_partial_result['target_name']} -> bet_line: {young_partial_result['bet_line']}")
-    elif young_partial_result is None:
+    print("   4. Búsqueda parcial: 'Jokic'")
+    jokic_partial_result = predictor.predict_game(mock_sportradar_game, "Jokic")
+    if jokic_partial_result is not None and 'error' not in jokic_partial_result:
+        print(f"      ✅ Encontrado: {jokic_partial_result['target_name']} -> bet_line: {jokic_partial_result['bet_line']}")
+    elif jokic_partial_result is None:
         print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
     else:
-        print(f"      ❌ Error: {young_partial_result['error']}")
+        print(f"      ❌ Error: {jokic_partial_result['error']}")
     
-    # Caso 5: Jugador suplente (P.J. Washington)
-    print("   5. Jugador suplente: 'P.J. Washington' (starter: False)")
-    washington_result = predictor.predict_game(mock_sportradar_game, "P.J. Washington")
-    if washington_result is not None and 'error' not in washington_result:
+    # Caso 5: Jugador suplente (Michael Porter Jr.)
+    print("   5. Jugador suplente: 'Michael Porter Jr.' (starter: True)")
+    porter_result = predictor.predict_game(mock_sportradar_game, "Michael Porter Jr.")
+    if porter_result is not None and 'error' not in porter_result:
         print(f"      ✅ Predicción exitosa:")
-        washington_result_clean = convert_numpy_types(washington_result)
-        print(json.dumps(washington_result_clean, indent=8, ensure_ascii=False))
-    elif washington_result is None:
+        porter_result_clean = convert_numpy_types(porter_result)
+        print(json.dumps(porter_result_clean, indent=8, ensure_ascii=False))
+    elif porter_result is None:
         print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
     else:
-        print(f"      ❌ Error: {washington_result['error']}")
+        print(f"      ❌ Error: {porter_result['error']}")
     
     # Caso 6: Jugador lesionado (status: INJ)
     print("   6. Jugador lesionado: 'Russell Westbrook' (status: INJ)")

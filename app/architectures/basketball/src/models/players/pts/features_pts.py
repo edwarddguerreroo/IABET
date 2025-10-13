@@ -1461,11 +1461,6 @@ class PointsFeatureEngineer:
                     
                     early_mapping = dict(zip(early_quarters['player'], early_avg))
                     late_mapping = dict(zip(late_quarters['player'], late_avg))
-                    
-                    # FEATURES ELIMINADAS: early_game_scoring, late_game_scoring, early_late_diff
-                    # Razón: early_game_scoring tiene importancia 0.1578%, muy baja contribución
-                    df['early_late_diff'] = 0.0  # Mantener solo esta para compatibilidad pero con valor neutro
-                    self._register_feature('early_late_diff', 'context_adjusters')
         
         except Exception as e:
             logger.warning(f"Error generando features de cuartos: {e}")

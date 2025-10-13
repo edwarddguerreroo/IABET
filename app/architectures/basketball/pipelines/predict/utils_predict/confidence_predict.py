@@ -91,7 +91,7 @@ class PlayersConfidence:
             self.load_data()
             
         try:
-            player_name = player_data.get('player_name', player_data.get('player', 'Unknown'))
+            player_name = player_data.get('player_name', player_data.get('player', player_data.get('Player', 'Unknown')))
             
             # USAR MÉTODOS EXISTENTES: Obtener información actualizada desde SportRadar si está disponible
             if game_data and player_name != 'Unknown':
@@ -196,7 +196,7 @@ class PlayersConfidence:
             return 70.0
 
     def calculate_player_vs_opponent_factor(self, player_name: str, opponent_team: str, 
-                                          player_position: str = 'G', max_games: int = 10) -> float:
+                                          player_position: str = 'G', max_games: int = 50) -> float:
         """
         Calcular factor de rendimiento del jugador vs equipo oponente específico
         
@@ -229,8 +229,8 @@ class PlayersConfidence:
                 logger.info(f"Sin datos H2H específicos {player_name} vs {opponent_team}")
                 return 1.0
             
-            # Tomar solo los últimos juegos para relevancia
-            player_vs_opp = player_vs_opp.sort_values('Date').tail(max_games)
+            # Usar todos los juegos vs el oponente para mejor precisión
+            player_vs_opp = player_vs_opp.sort_values('Date')
             
             # Calcular promedio de rendimiento vs este oponente
             vs_opp_stats = {
@@ -241,8 +241,8 @@ class PlayersConfidence:
                 'games': len(player_vs_opp)
             }
             
-            # Calcular promedio general del jugador (últimos 20 juegos)
-            player_general = player_all_data.sort_values('Date').tail(20)
+            # Calcular promedio general del jugador (todos los juegos para mejor precisión)
+            player_general = player_all_data.sort_values('Date')
             
             if len(player_general) == 0:
                 return 1.0
@@ -281,7 +281,7 @@ class PlayersConfidence:
             return 1.0
 
     def calculate_player_h2h_stats(self, player_name: str, opponent_team: str, 
-                                 target_stat: str = 'points', max_games: int = 10) -> Dict[str, Any]:
+                                 target_stat: str = 'points', max_games: int = 50) -> Dict[str, Any]:
         """
         Calcular estadísticas H2H detalladas del jugador vs equipo oponente
         
@@ -338,7 +338,7 @@ class PlayersConfidence:
                 player_vs_opp = player_vs_opp.sort_values('Date', ascending=False)
             
             # Limitar a máximo de juegos
-            h2h_recent = player_vs_opp.head(max_games)
+            h2h_recent = player_vs_opp.sort_values('Date')
             
             # Filtrar estadística objetivo válida
             if target_stat not in h2h_recent.columns:
@@ -384,7 +384,8 @@ class PlayersConfidence:
             last_10_mean = last_10.mean() if len(last_10) > 0 else None
             
             # Calcular factor H2H basado en rendimiento relativo (CONSERVADOR)
-            player_general = player_all_data.sort_values('Date', ascending=False).head(20)
+            # Usar todos los juegos para mejor precisión
+            player_general = player_all_data.sort_values('Date', ascending=False)
             
             if len(player_general) > 0 and target_stat in player_general.columns:
                 general_mean = player_general[target_stat].dropna().mean()
@@ -392,16 +393,23 @@ class PlayersConfidence:
                     # Factor H2H conservador para evitar sobreajuste
                     raw_factor = h2h_mean / general_mean
                     
-                    # Aplicar límites conservadores
-                    if len(h2h_stats) < 5:
-                        # Con pocos datos H2H, limitar el factor
-                        h2h_factor = min(raw_factor, 1.5)  # Máximo 50% de boost
-                    elif len(h2h_stats) < 10:
-                        # Con datos moderados, limitar más
-                        h2h_factor = min(raw_factor, 2.0)  # Máximo 100% de boost
+                    # Aplicar límites conservadores más estrictos para jugadores elite
+                    if general_mean >= 20:  # Jugadores elite (20+ pts promedio)
+                        # Para jugadores elite, ser más conservador con H2H
+                        if len(h2h_stats) < 5:
+                            h2h_factor = min(raw_factor, 1.2)  # Máximo 20% de boost
+                        elif len(h2h_stats) < 10:
+                            h2h_factor = min(raw_factor, 1.25)  # Máximo 25% de boost
+                        else:
+                            h2h_factor = min(raw_factor, 1.15)  # Máximo 15% de boost
                     else:
-                        # Con suficientes datos, permitir más variación
-                        h2h_factor = min(raw_factor, 2.5)  # Máximo 150% de boost
+                        # Para jugadores normales, mantener límites originales
+                        if len(h2h_stats) < 5:
+                            h2h_factor = min(raw_factor, 1.5)  # Máximo 50% de boost
+                        elif len(h2h_stats) < 10:
+                            h2h_factor = min(raw_factor, 1.8)  # Máximo 80% de boost
+                        else:
+                            h2h_factor = min(raw_factor, 2.0)  # Máximo 100% de boost
                     
                     # Aplicar factor de confianza basado en consistencia
                     if h2h_std > 0:
@@ -409,7 +417,10 @@ class PlayersConfidence:
                         h2h_factor = 1 + (h2h_factor - 1) * consistency_factor
                     
                     # Asegurar que el factor esté en rango razonable
-                    h2h_factor = max(0.5, min(h2h_factor, 2.0))  # Entre 0.5x y 2.0x
+                    if general_mean >= 20:  # Jugadores elite
+                        h2h_factor = max(0.8, min(h2h_factor, 1.2))  # Entre 0.8x y 1.2x para elite (menos conservador)
+                    else:
+                        h2h_factor = max(0.5, min(h2h_factor, 2.0))  # Entre 0.5x y 2.0x para normales
                 else:
                     h2h_factor = 1.0
             else:
@@ -1700,7 +1711,7 @@ class TeamsConfidence:
             return []
 
     def calculate_head_to_head_stats_teams_points(self, team_name: str, opponent_name: str, 
-                                                max_games: int = 20) -> Dict[str, Any]:
+                                                max_games: int = 50) -> Dict[str, Any]:
         """
         Calcular estadísticas H2H para TEAMS POINTS (enfoque en puntos del equipo específico)
         """
@@ -1729,8 +1740,8 @@ class TeamsConfidence:
             if 'Date' in h2h_team_vs_opponent.columns:
                 h2h_team_vs_opponent = h2h_team_vs_opponent.sort_values('Date', ascending=False)
             
-            # Limitar a máximo de juegos analizados
-            h2h_recent = h2h_team_vs_opponent.head(max_games)
+            # Usar todos los juegos H2H para mejor precisión
+            h2h_recent = h2h_team_vs_opponent
             
             logger.info(f"Encontrados {len(h2h_recent)} enfrentamientos H2H recientes")
             
@@ -1791,7 +1802,7 @@ class TeamsConfidence:
             return {}
 
     def calculate_head_to_head_stats_total_points(self, home_team: str, away_team: str, 
-                                                max_games: int = 20) -> Dict[str, Any]:
+                                                max_games: int = 50) -> Dict[str, Any]:
         """
         Calcular estadísticas H2H para TOTAL POINTS (enfoque en puntos totales del partido)
         """
@@ -1832,8 +1843,8 @@ class TeamsConfidence:
             if 'Date' in h2h_combined.columns:
                 h2h_combined = h2h_combined.sort_values('Date', ascending=False)
             
-            # Limitar a máximo de juegos analizados
-            h2h_recent = h2h_combined.head(max_games)
+            # Usar todos los juegos H2H para mejor precisión
+            h2h_recent = h2h_combined
             
             logger.info(f"📊 Encontrados {len(h2h_recent)} enfrentamientos H2H recientes")
             

@@ -65,6 +65,9 @@ class TeamsPointsPredictor:
         self.high_confidence_threshold = 75.0  # Umbral para alta confianza (más accesible)
         self.ultra_confidence_threshold = 85.0  # Umbral para ultra confianza (más accesible)
     
+        # Cargar datos y modelo automáticamente
+        self.load_data_and_model()
+        
     def load_data_and_model(self) -> bool:
         """
         Cargar datos históricos y modelo entrenado

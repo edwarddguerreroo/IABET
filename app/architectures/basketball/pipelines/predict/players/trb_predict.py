@@ -63,6 +63,9 @@ class TRBPredictor:
         self.confidence_calculator = PlayersConfidence()
         self.is_loaded = False
         self.tolerance = -2 # Tolerancia conservadora individual
+
+        # Cargar datos y modelo automáticamente
+        self.load_data_and_model()
     
     def load_data_and_model(self) -> bool:
         """

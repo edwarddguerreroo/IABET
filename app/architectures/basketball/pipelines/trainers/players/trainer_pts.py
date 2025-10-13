@@ -70,7 +70,7 @@ class XGBoostPTSTrainer:
                  teams_quarters_path: str,
                  output_dir: str = "app/architectures/basketball/results/pts_model",
                  n_trials: int = 25,
-                 cv_folds: int = 5,
+                 cv_folds: int = 3,
                  random_state: int = 42):
         """
         Inicializa el trainer completo.
@@ -936,7 +936,7 @@ def main():
         biometrics_path=biometrics_path,
         output_dir="app/architectures/basketball/results/pts_model",
         n_trials=20,
-        cv_folds=5,
+        cv_folds=3,
         random_state=42
     )
     

@@ -75,6 +75,9 @@ class DoubleDoublePredictor:
         self.is_loaded = False
         self.tolerance = 0.7  # Tolerancia para DD (probabilidad) individual
         self.confidence_threshold = 0.6  # Umbral de confianza para predicciones
+
+        # Cargar datos y modelo automáticamente
+        self.load_data_and_model()
     
     def load_data_and_model(self) -> bool:
         """

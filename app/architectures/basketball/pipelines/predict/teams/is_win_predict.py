@@ -65,6 +65,9 @@ class IsWinPredictor:
         self.min_confidence_threshold = 50.0  # Umbral mínimo de confianza
         self.high_confidence_threshold = 75.0  # Umbral para alta confianza
         self.ultra_confidence_threshold = 90.0  # Umbral para ultra confianza
+
+        # Cargar datos y modelo automáticamente
+        self.load_data_and_model()
     
     def load_data_and_model(self) -> bool:
         """

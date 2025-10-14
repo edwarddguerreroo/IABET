@@ -590,23 +590,12 @@ class Stacking3PTModel:
             task_type='CPU'
         )
         
-        # MODELO 4: Ridge - Estabilidad lineal (NUEVO)
-        # Ridge captura tendencias lineales globales que trees pueden perder
-        ridge_model = Ridge(
-            alpha=15.0,                     # Regularización L2 fuerte
-            fit_intercept=True,
-            max_iter=5000,
-            solver='auto',
-            random_state=42
-        )
-        
         # ==================== ENSEMBLE CONFIGURATION ====================
         
         self.models = {
             'xgboost': xgb_model,
             'lightgbm': lgb_model,
             'catboost': cb_model,
-            'ridge': ridge_model
         }
         
         # ==================== LOGGING ====================
@@ -616,7 +605,6 @@ class Stacking3PTModel:
         logger.info("=" * 60)
         logger.info(f"Base models: {len(self.models)}")
         logger.info("  - Tree-based: XGBoost, LightGBM, CatBoost")
-        logger.info("  - Linear: Ridge")
         logger.info("=" * 60)
     
     

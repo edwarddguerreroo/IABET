@@ -40,7 +40,7 @@ from app.architectures.basketball.src.models.teams.teams_points.model_teams_poin
 from app.architectures.basketball.src.preprocessing.data_loader import NBADataLoader
 from app.architectures.basketball.pipelines.predict.utils_predict.game_adapter import GameDataAdapter
 from app.architectures.basketball.pipelines.predict.utils_predict.common_utils import CommonUtils
-from app.architectures.basketball.pipelines.predict.utils_predict.confidence_predict import TeamsConfidence
+from app.architectures.basketball.pipelines.predict.utils_predict.confidence.confidence_teams import TeamsConfidence
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class TeamsPointsPredictor:
         self.common_utils = CommonUtils()
         self.confidence_calculator = TeamsConfidence()  # Calculadora de confianza centralizada
         self.is_loaded = False
-        self.base_tolerance = -1  # Tolerancia base más agresiva
+        self.base_tolerance = 0  # Tolerancia base más agresiva
         self.high_confidence_threshold = 75.0  # Umbral para alta confianza (más accesible)
         self.ultra_confidence_threshold = 85.0  # Umbral para ultra confianza (más accesible)
     
@@ -133,11 +133,15 @@ class TeamsPointsPredictor:
             # Obtener información de equipos desde game_data
             home_team_name = game_data.get('homeTeam', {}).get('name', 'Home Team')
             away_team_name = game_data.get('awayTeam', {}).get('name', 'Away Team')
+            
+            # Convertir nombres completos a abreviaciones para búsqueda en dataset
+            home_team_abbr = self.common_utils._get_team_abbreviation(home_team_name)
+            away_team_abbr = self.common_utils._get_team_abbreviation(away_team_name)
 
             # Si se especifica target_team, predecir solo ese equipo
             if target_team:
                 logger.info(f"🏀 Prediciendo equipo específico: {target_team}")
-                prediction = self._predict_single_team_from_game(game_data, teams_df, target_team, home_team_name, away_team_name)
+                prediction = self._predict_single_team_from_game(game_data, target_team, home_team_name, away_team_name)
                 
                 if 'error' in prediction:
                     logger.error(f"Error en predicción: {prediction['error']}")
@@ -159,10 +163,10 @@ class TeamsPointsPredictor:
                 logger.info(f"🏀 Prediciendo ambos equipos: {home_team_name} vs {away_team_name}")
                 
                 # Predecir equipo local
-                home_prediction = self._predict_single_team_from_game(game_data, teams_df, home_team_name, home_team_name, away_team_name)
+                home_prediction = self._predict_single_team_from_game(game_data, home_team_name, home_team_name, away_team_name)
                 
                 # Predecir equipo visitante  
-                away_prediction = self._predict_single_team_from_game(game_data, teams_df, away_team_name, home_team_name, away_team_name)
+                away_prediction = self._predict_single_team_from_game(game_data, away_team_name, home_team_name, away_team_name)
                 
                 # Manejar errores en predicciones individuales
                 if 'error' in home_prediction:
@@ -204,14 +208,13 @@ class TeamsPointsPredictor:
             logger.error(f"❌ Error en predicción desde SportRadar: {e}")
             return {'error': f'Error procesando datos de SportRadar: {str(e)}'}
 
-    def _predict_single_team_from_game(self, game_data: Dict[str, Any], teams_df, target_team: str, 
+    def _predict_single_team_from_game(self, game_data: Dict[str, Any], target_team: str, 
                                      home_team_name: str, away_team_name: str) -> Dict[str, Any]:
         """
         Método auxiliar para predecir un equipo específico desde datos de juego
         
         Args:
             game_data: Datos completos del juego
-            teams_df: DataFrame con datos de equipos convertidos
             target_team: Nombre del equipo a predecir
             home_team_name: Nombre del equipo local
             away_team_name: Nombre del equipo visitante
@@ -220,16 +223,17 @@ class TeamsPointsPredictor:
             Diccionario con predicción del equipo específico
         """
         try:
-            # Buscar el equipo objetivo
-            target_row = self.common_utils._smart_team_search(teams_df, target_team)
+            # Convertir nombre del equipo objetivo a abreviación para búsqueda
+            target_team_abbr = self.common_utils._get_team_abbreviation(target_team)
+            target_row = self.common_utils._smart_team_search(self.historical_teams, target_team_abbr)
             
             if target_row.empty:
-                available_teams = list(teams_df['Team'].unique())
+                available_teams = list(self.historical_teams['Team'].unique())
                 logger.warning(f"❌ Equipo no encontrado: {target_team}")
                 return {
                     'error': f'Equipo "{target_team}" no encontrado',
                     'available_teams': available_teams,
-                    'message': 'Equipos disponibles en el juego'
+                    'message': 'Equipos disponibles en el dataset histórico'
                 }
             
             # Extraer datos del equipo
@@ -295,20 +299,21 @@ class TeamsPointsPredictor:
             # PASO CRÍTICO: Buscar datos históricos del equipo específico (ÚLTIMOS 30 PARTIDOS)
             team_name = team_data.get('Team', 'Unknown')
             
-            # Filtrar datos históricos del equipo específico usando búsqueda inteligente
-            team_historical_full = self.common_utils._smart_team_search(self.historical_teams, team_name)
+            # Convertir nombre del equipo a abreviación para búsqueda
+            team_name_abbr = self.common_utils._get_team_abbreviation(team_name)
+            team_historical_full = self.common_utils._smart_team_search(self.historical_teams, team_name_abbr)
             
             if len(team_historical_full) == 0:
                 logger.warning(f"⚠️ No se encontraron datos históricos para {team_name}")
-                # Usar datos de equipos similares o promedio (últimos 30)
-                team_historical = self.historical_teams.head(100).tail(30).copy()
+                # Usar datos de equipos similares o promedio (últimos 50)
+                team_historical = self.historical_teams.head(100).tail(50).copy()
                 logger.info(f"📊 Usando datos de referencia: {len(team_historical)} registros")
             else:
-                # LIMITAR A ÚLTIMOS 30 PARTIDOS para mejor precisión
-                team_historical = team_historical_full.tail(30).copy()
+                # USAR TODOS LOS JUEGOS DISPONIBLES para máxima precisión
+                team_historical = team_historical_full.copy()
                 total_available = len(team_historical_full)
                 used_games = len(team_historical)
-                logger.info(f"✅ {team_name}: {used_games} juegos recientes de {total_available} disponibles (últimos 30)")
+                logger.info(f"✅ {team_name}: {used_games} juegos históricos disponibles (TODOS)")
                 
                 # Si tiene menos de 10 juegos, advertir pero continuar
                 if used_games < 10:
@@ -398,13 +403,10 @@ class TeamsPointsPredictor:
             )
             
             # SISTEMA ADAPTATIVO BASADO EN CONFIANZA PARA 95%+ EFECTIVIDAD
-            final_prediction, tolerance_used = self.confidence_calculator._adaptive_prediction_strategy(
-                raw_prediction=raw_prediction_adjusted,  # Usar predicción ajustada
-                actual_points_mean=actual_points_mean_adjusted if 'actual_points_mean_adjusted' in locals() else actual_points_mean,
-                confidence=preliminary_confidence,
-                prediction_std=prediction_std,
-                actual_points_std=actual_points_std
-            )
+            # Estrategia fija: 80% modelo + 20% histórico + tolerancia
+            tolerance_used = self.base_tolerance  # -1
+            actual_mean = actual_points_mean_adjusted if 'actual_points_mean_adjusted' in locals() else actual_points_mean
+            final_prediction = (raw_prediction_adjusted * 0.80) + (actual_mean * 0.20) + tolerance_used
             
             team_points_prediction = max(85, final_prediction)  # Límite basado en análisis real del dataset (P1)
             
@@ -459,15 +461,14 @@ class TeamsPointsPredictor:
                 'team_points_prediction': int(team_points_prediction),
                 'confidence_percentage': round(confidence_percentage, 1),
                 'prediction_details': {
-                    'team': team_name,
                     'team_id': self.common_utils._get_team_id(team_name),
-                    'opponent': team_data.get('Opp', 'Unknown'),
+                    'team': team_name,
                     'opponent_id': self.common_utils._get_team_id(team_data.get('Opp', 'Unknown')),
+                    'opponent': team_data.get('Opp', 'Unknown'),
                     'tolerance_applied': tolerance_used,
                     'historical_games_used': len(team_historical),
                     'raw_prediction': round(raw_prediction_adjusted, 1),
                     'h2h_adjusted_prediction': round(raw_prediction_adjusted, 1),
-                    'final_prediction': int(team_points_prediction),
                     'actual_points_mean': round(actual_points_mean, 1),
                     'actual_points_std': round(actual_points_std, 1),
                     'prediction_std': round(prediction_std, 1),
@@ -532,12 +533,12 @@ def test_teams_points_predictor():
         "scheduled": "2024-01-15T20:00:00Z",
         "status": "scheduled",
         "homeTeam": {
-            "name": "New York Knicks",
-            "alias": "NYK",
+            "name": "Oklahoma City Thunder",
+            "alias": "OKC",
             "players": [
                 {
                     "playerId": "sr:player:123",
-                    "fullName": "Jalen Brunson",
+                    "fullName": "Shai Gilgeous-Alexander",
                     "position": "G",
                     "starter": True,
                     "status": "ACT",
@@ -546,9 +547,9 @@ def test_teams_points_predictor():
                 },
                 {
                     "playerId": "sr:player:999",
-                    "fullName": "Isaiah Hartenstein",
+                    "fullName": "Chet Holmgren",
                     "position": "C",
-                    "starter": False,
+                    "starter": True,
                     "status": "ACT",
                     "jerseyNumber": "7",
                     "injuries": []
@@ -570,11 +571,11 @@ def test_teams_points_predictor():
                 },
                 {
                     "playerId": "sr:player:789",
-                    "fullName": "Luka Dončić",
+                    "fullName": "Jamal Murray",
                     "position": "G",
                     "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "77",
+                    "jerseyNumber": "27",
                     "injuries": []
                 },
                 {
@@ -644,32 +645,32 @@ def test_teams_points_predictor():
         print(f"      ❌ Error: {error_msg}")
     
     # Caso 2: Búsqueda case-insensitive
-    print("   2. Búsqueda case-insensitive: 'new york knicks'")
-    knicks_lower_result = predictor.predict_game(mock_sportradar_game, "new york knicks")
-    if isinstance(knicks_lower_result, list) and len(knicks_lower_result) > 0:
-        knicks_prediction = next((r for r in knicks_lower_result if 'knicks' in r.get('target_name', '').lower()), knicks_lower_result[0])
-        print(f"      ✅ Encontrado: {knicks_prediction['target_name']} -> bet_line: {knicks_prediction['bet_line']}")
-    elif isinstance(knicks_lower_result, dict) and 'error' not in knicks_lower_result:
-        print(f"      ✅ Encontrado: {knicks_lower_result['target_name']} -> bet_line: {knicks_lower_result['bet_line']}")
+    print("   2. Búsqueda case-insensitive: 'oklahoma city thunder'")
+    okc_lower_result = predictor.predict_game(mock_sportradar_game, "oklahoma city thunder")
+    if isinstance(okc_lower_result, list) and len(okc_lower_result) > 0:
+        okc_prediction = next((r for r in okc_lower_result if 'thunder' in r.get('target_name', '').lower()), okc_lower_result[0])
+        print(f"      ✅ Encontrado: {okc_prediction['target_name']} -> bet_line: {okc_prediction['bet_line']}")
+    elif isinstance(okc_lower_result, dict) and 'error' not in okc_lower_result:
+        print(f"      ✅ Encontrado: {okc_lower_result['target_name']} -> bet_line: {okc_lower_result['bet_line']}")
     else:
-        error_msg = knicks_lower_result.get('error', 'Resultado inesperado') if isinstance(knicks_lower_result, dict) else "Resultado inesperado"
+        error_msg = okc_lower_result.get('error', 'Resultado inesperado') if isinstance(okc_lower_result, dict) else "Resultado inesperado"
         print(f"      ❌ Error: {error_msg}")
     
     # Caso 3: Búsqueda parcial
-    print("   3. Búsqueda parcial: 'Knicks'")
-    knicks_partial_result = predictor.predict_game(mock_sportradar_game, "Knicks")
-    if isinstance(knicks_partial_result, list) and len(knicks_partial_result) > 0:
-        knicks_pred = next((r for r in knicks_partial_result if 'knicks' in r.get('target_name', '').lower()), knicks_partial_result[0])
-        print(f"      ✅ Encontrado: {knicks_pred['target_name']} -> bet_line: {knicks_pred['bet_line']}")
-    elif isinstance(knicks_partial_result, dict) and 'error' not in knicks_partial_result:
-        print(f"      ✅ Encontrado: {knicks_partial_result['target_name']} -> bet_line: {knicks_partial_result['bet_line']}")
+    print("   3. Búsqueda parcial: 'Thunder'")
+    okc_partial_result = predictor.predict_game(mock_sportradar_game, "Thunder")
+    if isinstance(okc_partial_result, list) and len(okc_partial_result) > 0:
+        okc_pred = next((r for r in okc_partial_result if 'thunder' in r.get('target_name', '').lower()), okc_partial_result[0])
+        print(f"      ✅ Encontrado: {okc_pred['target_name']} -> bet_line: {okc_pred['bet_line']}")
+    elif isinstance(okc_partial_result, dict) and 'error' not in okc_partial_result:
+        print(f"      ✅ Encontrado: {okc_partial_result['target_name']} -> bet_line: {okc_partial_result['bet_line']}")
     else:
-        error_msg = knicks_partial_result.get('error', 'Resultado inesperado') if isinstance(knicks_partial_result, dict) else "Resultado inesperado"
+        error_msg = okc_partial_result.get('error', 'Resultado inesperado') if isinstance(okc_partial_result, dict) else "Resultado inesperado"
         print(f"      ❌ Error: {error_msg}")
     
     # Caso 4: Equipo local vs visitante
-    print("   4. Equipo local: 'New York Knicks' (home)")
-    home_result = predictor.predict_game(mock_sportradar_game, "New York Knicks")
+    print("   4. Equipo local: 'Oklahoma City Thunder' (home)")
+    home_result = predictor.predict_game(mock_sportradar_game, "Oklahoma City Thunder")
     if 'error' not in home_result:
         print(f"      ✅ Encontrado: {home_result['target_name']} -> bet_line: {home_result['bet_line']}")
         print(f"      🏠 Info: Equipo juega en casa")

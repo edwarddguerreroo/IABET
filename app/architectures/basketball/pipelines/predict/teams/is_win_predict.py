@@ -39,7 +39,7 @@ sys.path.insert(0, basketball_dir)
 from app.architectures.basketball.src.preprocessing.data_loader import NBADataLoader
 from app.architectures.basketball.pipelines.predict.utils_predict.game_adapter import GameDataAdapter
 from app.architectures.basketball.pipelines.predict.utils_predict.common_utils import CommonUtils
-from app.architectures.basketball.pipelines.predict.utils_predict.confidence_predict import TeamsConfidence
+from app.architectures.basketball.pipelines.predict.utils_predict.confidence.confidence_teams import TeamsConfidence
 from app.architectures.basketball.pipelines.predict.teams.teams_points_predict import TeamsPointsPredictor
 
 logger = logging.getLogger(__name__)
@@ -133,11 +133,15 @@ class IsWinPredictor:
             players_df, teams_df = self.game_adapter.convert_game_to_dataframes(game_data)
             
             # 2. Obtener información de equipos desde game_data
-            home_team = game_data.get('homeTeam', {}).get('name', 'Home Team')
-            away_team = game_data.get('awayTeam', {}).get('name', 'Away Team')
+            home_team_name = game_data.get('homeTeam', {}).get('name', 'Home Team')
+            away_team_name = game_data.get('awayTeam', {}).get('name', 'Away Team')
+            
+            # Convertir nombres completos a abreviaciones para búsqueda en dataset
+            home_team = self.common_utils._get_team_abbreviation(home_team_name)
+            away_team = self.common_utils._get_team_abbreviation(away_team_name)
             
             # 3. Hacer predicción de victoria/derrota
-            prediction_result = self.predict_match_winner(teams_df, game_data)
+            prediction_result = self.predict_match_winner(game_data)
             
             # Si no hay predicción (probabilidad < 68%), devolver None
             if prediction_result is None:
@@ -168,7 +172,7 @@ class IsWinPredictor:
             logger.error(f"❌ Error en predicción desde SportRadar: {e}")
             return {'error': f'Error procesando datos de SportRadar: {str(e)}'}
     
-    def predict_match_winner(self, teams_df: pd.DataFrame, game_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    def predict_match_winner(self, game_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Predecir el equipo ganador del partido usando predicciones de team points
         
@@ -177,7 +181,6 @@ class IsWinPredictor:
         el ganador basándose en quién tiene más puntos predichos.
         
         Args:
-            teams_df: DataFrame con datos de ambos equipos
             game_data: Datos del juego de SportRadar (opcional)
                 
         Returns:
@@ -191,7 +194,11 @@ class IsWinPredictor:
             home_team_name = game_data.get('homeTeam', {}).get('name', 'Home Team')
             away_team_name = game_data.get('awayTeam', {}).get('name', 'Away Team')
             
-            logger.info(f"🏀 Prediciendo ganador usando team points: {home_team_name} vs {away_team_name}")
+            # Convertir nombres completos a abreviaciones para búsqueda en dataset
+            home_team = self.common_utils._get_team_abbreviation(home_team_name)
+            away_team = self.common_utils._get_team_abbreviation(away_team_name)
+            
+            logger.info(f"🏀 Prediciendo ganador usando team points: {home_team_name} ({home_team}) vs {away_team_name} ({away_team})")
             
             # NUEVA LÓGICA: Usar predictor de team points para ambos equipos
             logger.info("📊 Obteniendo predicciones de puntos para ambos equipos...")
@@ -254,19 +261,17 @@ class IsWinPredictor:
             elif point_difference > 5:
                 win_probability = 0.65  # Diferencia pequeña = probabilidad media
             else:
-                win_probability = 0.55  # Diferencia muy pequeña = probabilidad baja
+                win_probability = 0.60  # Diferencia muy pequeña = probabilidad mínima aceptable
             
             # Ajustar probabilidad basada en confianza promedio
             avg_confidence = (home_confidence + away_confidence) / 2
             if avg_confidence > 80:
                 win_probability = min(win_probability + 0.1, 0.95)
             elif avg_confidence < 60:
-                win_probability = max(win_probability - 0.1, 0.45)
+                win_probability = max(win_probability - 0.05, 0.55)  # Reducir menos el ajuste
             
-            # FILTRO: Solo dar predicciones si probabilidad ≥60% (más permisivo que antes)
-            if win_probability < 0.60:
-                logger.info(f"Probabilidad insuficiente: {win_probability:.1%} - No se emite predicción")
-                return None  # No devolver nada si no cumple el umbral
+            # SIEMPRE emitir predicción - el equipo con más puntos predichos es el ganador
+            logger.info(f"🎯 Probabilidad de victoria: {win_probability:.1%} - Emitiendo predicción")
             
             # Calcular confianza final (promedio ponderado)
             final_confidence = (winner_confidence + (win_probability * 100)) / 2
@@ -275,7 +280,7 @@ class IsWinPredictor:
                 
             # CALCULAR ESTADÍSTICAS DETALLADAS DE VICTORIAS PARA PREDICTION_DETAILS
             # Estadísticas de victorias del equipo local
-            home_team_historical = self.common_utils._smart_team_search(self.historical_teams, home_team_name)
+            home_team_historical = self.common_utils._smart_team_search(self.historical_teams, home_team)
             home_wins_last_5 = home_team_historical.tail(5)['is_win'].sum() if len(home_team_historical) >= 5 else home_team_historical['is_win'].sum()
             home_wins_last_10 = home_team_historical.tail(10)['is_win'].sum() if len(home_team_historical) >= 10 else home_team_historical['is_win'].sum()
             home_total_wins = home_team_historical['is_win'].sum()
@@ -283,22 +288,22 @@ class IsWinPredictor:
             home_win_rate = (home_total_wins / home_total_games) * 100 if home_total_games > 0 else 0
             
             # Estadísticas de victorias del equipo visitante
-            away_team_historical = self.common_utils._smart_team_search(self.historical_teams, away_team_name)
+            away_team_historical = self.common_utils._smart_team_search(self.historical_teams, away_team)
             away_wins_last_5 = away_team_historical.tail(5)['is_win'].sum() if len(away_team_historical) >= 5 else away_team_historical['is_win'].sum()
             away_wins_last_10 = away_team_historical.tail(10)['is_win'].sum() if len(away_team_historical) >= 10 else away_team_historical['is_win'].sum()
             away_total_wins = away_team_historical['is_win'].sum()
             away_total_games = len(away_team_historical)
             away_win_rate = (away_total_wins / away_total_games) * 100 if away_total_games > 0 else 0
             
-            # Estadísticas H2H (enfrentamientos directos)
+            # Estadísticas H2H (enfrentamientos directos) usando abreviaciones
             h2h_games = self.historical_teams[
-                ((self.historical_teams['Team'] == home_team_name) & (self.historical_teams['Opp'] == away_team_name)) |
-                ((self.historical_teams['Team'] == away_team_name) & (self.historical_teams['Opp'] == home_team_name))
+                ((self.historical_teams['Team'] == home_team) & (self.historical_teams['Opp'] == away_team)) |
+                ((self.historical_teams['Team'] == away_team) & (self.historical_teams['Opp'] == home_team))
             ].copy()
             
             h2h_games_count = len(h2h_games)
-            home_h2h_wins = len(h2h_games[(h2h_games['Team'] == home_team_name) & (h2h_games['is_win'] == 1)])
-            away_h2h_wins = len(h2h_games[(h2h_games['Team'] == away_team_name) & (h2h_games['is_win'] == 1)])
+            home_h2h_wins = len(h2h_games[(h2h_games['Team'] == home_team) & (h2h_games['is_win'] == 1)])
+            away_h2h_wins = len(h2h_games[(h2h_games['Team'] == away_team) & (h2h_games['is_win'] == 1)])
                 
             return {
                 "home_team": home_team_name,

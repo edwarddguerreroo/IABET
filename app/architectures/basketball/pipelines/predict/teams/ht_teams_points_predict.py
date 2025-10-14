@@ -40,7 +40,7 @@ from app.architectures.basketball.src.models.teams.halftime_points.model_halftim
 from app.architectures.basketball.src.preprocessing.data_loader import NBADataLoader
 from app.architectures.basketball.pipelines.predict.utils_predict.game_adapter import GameDataAdapter
 from app.architectures.basketball.pipelines.predict.utils_predict.common_utils import CommonUtils
-from app.architectures.basketball.pipelines.predict.utils_predict.confidence_predict import TeamsConfidence
+from app.architectures.basketball.pipelines.predict.utils_predict.confidence.confidence_teams import TeamsConfidence
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +127,15 @@ class HalfTimeTeamsPointsPredictor:
             # Obtener información de equipos desde game_data
             home_team_name = game_data.get('homeTeam', {}).get('name', 'Home Team')
             away_team_name = game_data.get('awayTeam', {}).get('name', 'Away Team')
+            
+            # Convertir nombres completos a abreviaciones para búsqueda en dataset
+            home_team_abbr = self.common_utils._get_team_abbreviation(home_team_name)
+            away_team_abbr = self.common_utils._get_team_abbreviation(away_team_name)
 
             # Si se especifica target_team, predecir solo ese equipo
             if target_team:
                 logger.info(f"🏀 Prediciendo equipo específico: {target_team}")
-                prediction = self._predict_single_team_from_game(game_data, teams_df, target_team, home_team_name, away_team_name)
+                prediction = self._predict_single_team_from_game(game_data, target_team, home_team_name, away_team_name)
                 
                 if 'error' in prediction:
                     logger.error(f"Error en predicción: {prediction['error']}")
@@ -153,10 +157,10 @@ class HalfTimeTeamsPointsPredictor:
                 logger.info(f"🏀 Prediciendo ambos equipos: {home_team_name} vs {away_team_name}")
                 
                 # Predecir equipo local
-                home_prediction = self._predict_single_team_from_game(game_data, teams_df, home_team_name, home_team_name, away_team_name)
+                home_prediction = self._predict_single_team_from_game(game_data, home_team_name, home_team_name, away_team_name)
                 
                 # Predecir equipo visitante  
-                away_prediction = self._predict_single_team_from_game(game_data, teams_df, away_team_name, home_team_name, away_team_name)
+                away_prediction = self._predict_single_team_from_game(game_data, away_team_name, home_team_name, away_team_name)
                 
                 # Manejar errores en predicciones individuales
                 if 'error' in home_prediction:
@@ -198,14 +202,13 @@ class HalfTimeTeamsPointsPredictor:
             logger.error(f"❌ Error en predicción desde SportRadar: {e}")
             return {'error': f'Error procesando datos de SportRadar: {str(e)}'}
 
-    def _predict_single_team_from_game(self, game_data: Dict[str, Any], teams_df, target_team: str, 
+    def _predict_single_team_from_game(self, game_data: Dict[str, Any], target_team: str, 
                                      home_team_name: str, away_team_name: str) -> Dict[str, Any]:
         """
         Método auxiliar para predecir un equipo específico desde datos de juego
         
         Args:
             game_data: Datos completos del juego
-            teams_df: DataFrame con datos de equipos convertidos
             target_team: Nombre del equipo a predecir
             home_team_name: Nombre del equipo local
             away_team_name: Nombre del equipo visitante
@@ -214,25 +217,18 @@ class HalfTimeTeamsPointsPredictor:
             Diccionario con predicción del equipo específico
         """
         try:
-            # Verificar que teams_df no sea None
-            if teams_df is None:
-                logger.error(f"❌ teams_df es None para equipo: {target_team}")
-                return {
-                    'error': f'Datos de equipos no disponibles para {target_team}',
-                    'team': target_team,
-                    'team_points_prediction': None
-                }
-            
-            # Buscar el equipo objetivo
-            target_row = self.common_utils._smart_team_search(teams_df, target_team)
+
+            # Convertir nombre del equipo objetivo a abreviación para búsqueda
+            target_team_abbr = self.common_utils._get_team_abbreviation(target_team)
+            target_row = self.common_utils._smart_team_search(self.historical_teams, target_team_abbr)
             
             if target_row.empty:
-                available_teams = list(teams_df['Team'].unique())
+                available_teams = list(self.historical_teams['Team'].unique())
                 logger.warning(f"❌ Equipo no encontrado: {target_team}")
                 return {
                     'error': f'Equipo "{target_team}" no encontrado',
                     'available_teams': available_teams,
-                    'message': 'Equipos disponibles en el juego'
+                    'message': 'Equipos disponibles en el dataset histórico'
                 }
             
             # Extraer datos del equipo
@@ -298,20 +294,21 @@ class HalfTimeTeamsPointsPredictor:
             # PASO CRÍTICO: Buscar datos históricos del equipo específico (ÚLTIMOS 30 PARTIDOS)
             team_name = team_data.get('Team', 'Unknown')
             
-            # Filtrar datos históricos del equipo específico usando búsqueda inteligente
-            team_historical_full = self.common_utils._smart_team_search(self.historical_teams, team_name)
+            # Convertir nombre del equipo a abreviación para búsqueda
+            team_name_abbr = self.common_utils._get_team_abbreviation(team_name)
+            team_historical_full = self.common_utils._smart_team_search(self.historical_teams, team_name_abbr)
             
             if len(team_historical_full) == 0:
                 logger.warning(f"⚠️ No se encontraron datos históricos para {team_name}")
-                # Usar datos de equipos similares o promedio (últimos 30)
-                team_historical = self.historical_teams.head(100).tail(30).copy()
+                # Usar datos de equipos similares o promedio (últimos 50)
+                team_historical = self.historical_teams.head(100).tail(50).copy()
                 logger.info(f"📊 Usando datos de referencia: {len(team_historical)} registros")
             else:
-                # LIMITAR A ÚLTIMOS 30 PARTIDOS para mejor precisión
-                team_historical = team_historical_full.tail(30).copy()
+                # USAR TODOS LOS JUEGOS DISPONIBLES para máxima precisión
+                team_historical = team_historical_full.copy()
                 total_available = len(team_historical_full)
                 used_games = len(team_historical)
-                logger.info(f"✅ {team_name}: {used_games} juegos recientes de {total_available} disponibles (últimos 30)")
+                logger.info(f"✅ {team_name}: {used_games} juegos históricos disponibles (TODOS)")
                 
                 # Si tiene menos de 10 juegos, advertir pero continuar
                 if used_games < 10:
@@ -401,13 +398,10 @@ class HalfTimeTeamsPointsPredictor:
             )
             
             # SISTEMA ADAPTATIVO BASADO EN CONFIANZA PARA 95%+ EFECTIVIDAD
-            final_prediction, tolerance_used = self.confidence_calculator._adaptive_prediction_strategy(
-                raw_prediction=raw_prediction_adjusted,  # Usar predicción ajustada
-                actual_points_mean=actual_ht_mean_adjusted if 'actual_ht_mean_adjusted' in locals() else actual_ht_mean,
-                confidence=preliminary_confidence,
-                prediction_std=prediction_std,
-                actual_points_std=actual_ht_std
-            )
+            # Estrategia fija: 80% modelo + 20% histórico + tolerancia
+            tolerance_used = self.base_tolerance  # -1
+            actual_mean = actual_ht_mean_adjusted if 'actual_ht_mean_adjusted' in locals() else actual_ht_mean
+            final_prediction = (raw_prediction_adjusted * 0.80) + (actual_mean * 0.20) + tolerance_used
             
             halftime_prediction = max(10, final_prediction)  # Límite basado en análisis real del dataset HT (10-91)
             

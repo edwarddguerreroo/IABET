@@ -90,15 +90,18 @@ class PointsFeatureEngineer:
             result = pd.Series(0, index=df.index)
         else:
             if operation == 'mean':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
             elif operation == 'std':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=2).std().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=2).std().shift(1).fillna(0)
             elif operation == 'max':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).max().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).max().shift(1).fillna(0)
             elif operation == 'sum':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).sum().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).sum().shift(1).fillna(0)
             else:
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
+            
+            # Asegurar que el índice coincida con el DataFrame original
+            result = result.reindex(df.index, fill_value=0)
         
         self._rolling_cache[cache_key] = result
         return result

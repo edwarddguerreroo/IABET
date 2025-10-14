@@ -16,20 +16,10 @@ from typing import Dict, List, Any, Union, Tuple, Optional
 import logging
 from datetime import datetime
 
-def convert_numpy_types(obj):
-    """Convierte tipos de NumPy a tipos nativos de Python para serialización JSON"""
-    if isinstance(obj, np.integer):
-        return int(obj)
-    elif isinstance(obj, np.floating):
-        return float(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        return {key: convert_numpy_types(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_numpy_types(item) for item in obj]
-    else:
-        return obj
+#Ejecucion Paralela
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Configurar rutas correctamente
 current_file = os.path.abspath(__file__)
@@ -61,6 +51,8 @@ from app.architectures.basketball.pipelines.predict.players.ast_predict import A
 from app.architectures.basketball.pipelines.predict.players.dd_predict import DoubleDoublePredictor
 from app.architectures.basketball.pipelines.predict.players.trb_predict import TRBPredictor
 
+# Utilidades
+from app.utils.helpers import convert_numpy_types
 logger = logging.getLogger(__name__)
 
 class UnifiedPredictor: 
@@ -156,12 +148,13 @@ class UnifiedPredictor:
             logger.error(f"❌ Error cargando modelos: {e}")
             return False
 
-    def predict_games(self, games_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def predict_games(self, games_data: List[Dict[str, Any]], max_workers: int = 8) -> Dict[str, Any]:
         """
-        Predecir múltiples juegos
+        Predecir múltiples juegos EN PARALELO para máxima velocidad
         
         Args:
             games_data: Lista de datos de juegos de SportRadar
+            max_workers: Número máximo de hilos paralelos (default: 8)
             
         Returns:
             Diccionario con todas las predicciones organizadas por juego
@@ -173,17 +166,45 @@ class UnifiedPredictor:
         all_predictions = {
             'games_processed': len(games_data),
             'timestamp': datetime.now().isoformat(),
-            'predictions': []
+            'predictions': [],
         }
         
-        for game_idx, game_data in enumerate(games_data):
-            logger.info(f"🎮 Procesando juego {game_idx + 1}/{len(games_data)}: {game_data.get('homeTeam', {}).get('name', 'Home')} vs {game_data.get('awayTeam', {}).get('name', 'Away')}")
-            
-            game_predictions = self.predict_single_game(game_data)
-            # Convertir tipos de NumPy en las predicciones del juego
-            game_predictions_clean = convert_numpy_types(game_predictions)
-            all_predictions['predictions'].append(game_predictions_clean)
+        logger.info(f"🚀 Iniciando predicciones PARALELAS para {len(games_data)} juegos con {max_workers} hilos")
         
+        # Usar ThreadPoolExecutor para ejecución paralela
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Crear tareas para cada juego
+            future_to_game = {
+                executor.submit(self.predict_single_game, game_data): (idx, game_data) 
+                for idx, game_data in enumerate(games_data)
+            }
+            
+            # Procesar resultados conforme se completan
+            completed_games = 0
+            for future in as_completed(future_to_game):
+                game_idx, game_data = future_to_game[future]
+                completed_games += 1
+                
+                try:
+                    game_predictions = future.result()
+                    # Convertir tipos de NumPy en las predicciones del juego
+                    game_predictions_clean = convert_numpy_types(game_predictions)
+                    all_predictions['predictions'].append(game_predictions_clean)
+                    
+                    logger.info(f"✅ Juego {completed_games}/{len(games_data)} completado: {game_data.get('homeTeam', {}).get('name', 'Home')} vs {game_data.get('awayTeam', {}).get('name', 'Away')}")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error procesando juego {game_idx + 1}: {e}")
+                    all_predictions['predictions'].append({
+                        'game_info': {
+                            'game_id': game_data.get('gameId', 'unknown'),
+                            'home_team': game_data.get('homeTeam', {}).get('name', 'Home Team'),
+                            'away_team': game_data.get('awayTeam', {}).get('name', 'Away Team'),
+                        },
+                        'error': str(e)
+                    })
+        
+        logger.info(f"🎯 Predicciones paralelas completadas: {len(all_predictions['predictions'])} juegos procesados")
         return all_predictions
 
     def predict_single_game(self, game_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -231,38 +252,45 @@ class UnifiedPredictor:
 
     def _predict_teams(self, game_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Hacer todas las predicciones de equipos
+        Hacer todas las predicciones de equipos EN PARALELO
         """
         team_predictions = {}
         
         try:
-            # IsWin - Solo si probabilidad > 68%
-            is_win_result = self.is_win_predictor.predict_game(game_data)
-            team_predictions['is_win'] = is_win_result
+            # Definir tareas de predicción de equipos
+            team_tasks = {
+                'is_win': lambda: self.is_win_predictor.predict_game(game_data),
+                'total_points': lambda: self.total_points_predictor.predict_game(game_data),
+                'teams_points': lambda: self.teams_points_predictor.predict_game(game_data),
+                'ht_teams_points': lambda: self.ht_teams_points_predictor.predict_game(game_data),
+                'ht_total_points': lambda: self.ht_total_points_predictor.predict_game(game_data)
+            }
             
-            # Total Points - Usa el predictor actualizado que suma teams points
-            total_points_result = self.total_points_predictor.predict_game(game_data)
-            team_predictions['total_points'] = total_points_result
-            
-            # Teams Points (Home y Away)
-            teams_points_results = self.teams_points_predictor.predict_game(game_data)
-            if isinstance(teams_points_results, list):
-                team_predictions['home_team_points'] = teams_points_results[0] if len(teams_points_results) > 0 else None
-                team_predictions['away_team_points'] = teams_points_results[1] if len(teams_points_results) > 1 else None
-            else:
-                team_predictions['teams_points'] = teams_points_results
-            
-            # Halftime Teams Points (Home y Away)
-            ht_teams_points_results = self.ht_teams_points_predictor.predict_game(game_data)
-            if isinstance(ht_teams_points_results, list):
-                team_predictions['ht_home_team_points'] = ht_teams_points_results[0] if len(ht_teams_points_results) > 0 else None
-                team_predictions['ht_away_team_points'] = ht_teams_points_results[1] if len(ht_teams_points_results) > 1 else None
-            else:
-                team_predictions['ht_teams_points'] = ht_teams_points_results
-            
-            # Halftime Total Points
-            ht_total_points_result = self.ht_total_points_predictor.predict_game(game_data)
-            team_predictions['ht_total_points'] = ht_total_points_result
+            # Ejecutar todas las predicciones de equipos en paralelo
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_task = {
+                    executor.submit(task_func): task_name 
+                    for task_name, task_func in team_tasks.items()
+                }
+                
+                for future in as_completed(future_to_task):
+                    task_name = future_to_task[future]
+                    try:
+                        result = future.result()
+                        
+                        # Procesar resultados según el tipo
+                        if task_name == 'teams_points' and isinstance(result, list):
+                            team_predictions['home_team_points'] = result[0] if len(result) > 0 else None
+                            team_predictions['away_team_points'] = result[1] if len(result) > 1 else None
+                        elif task_name == 'ht_teams_points' and isinstance(result, list):
+                            team_predictions['ht_home_team_points'] = result[0] if len(result) > 0 else None
+                            team_predictions['ht_away_team_points'] = result[1] if len(result) > 1 else None
+                        else:
+                            team_predictions[task_name] = result
+                            
+                    except Exception as e:
+                        logger.error(f"❌ Error en predicción {task_name}: {e}")
+                        team_predictions[f'{task_name}_error'] = str(e)
                 
         except Exception as e:
             logger.error(f"❌ Error en predicciones de equipos: {e}")
@@ -273,7 +301,7 @@ class UnifiedPredictor:
 
     def _predict_all_players(self, game_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Hacer predicciones para todos los jugadores disponibles en ambos equipos
+        Hacer predicciones para todos los jugadores disponibles EN PARALELO
         """
         all_player_predictions = []
         
@@ -289,28 +317,39 @@ class UnifiedPredictor:
                 if player.get('status', '') == 'ACT' and not player.get('injuries', [])
             ]
             
-            logger.info(f"🏃 Encontrados {len(active_players)} jugadores activos para predicciones")
+            logger.info(f"🏃 Encontrados {len(active_players)} jugadores activos para predicciones PARALELAS")
             
-            # Hacer predicciones para cada jugador activo
-            for player in active_players:
-                player_name = player.get('fullName', '')
-                if not player_name:
-                    continue
-                    
-                logger.info(f"🎯 Prediciendo para {player_name}...")
-                player_predictions = self._predict_single_player(game_data, player_name)
+            # Ejecutar predicciones de jugadores en paralelo
+            with ThreadPoolExecutor(max_workers=min(16, len(active_players))) as executor:
+                # Crear tareas para cada jugador
+                future_to_player = {
+                    executor.submit(self._predict_single_player, game_data, player.get('fullName', '')): player
+                    for player in active_players
+                    if player.get('fullName', '')
+                }
                 
-                if player_predictions:
-                    all_player_predictions.append({
-                        'player_name': player_name,
-                        'player_info': {
-                            'position': player.get('position', ''),
-                            'jersey_number': player.get('jerseyNumber', ''),
-                            'status': player.get('status', '')
-                        },
-                        'predictions': player_predictions
-                    })
+                # Procesar resultados conforme se completan
+                for future in as_completed(future_to_player):
+                    player = future_to_player[future]
+                    player_name = player.get('fullName', '')
                     
+                    try:
+                        player_predictions = future.result()
+                        
+                        if player_predictions:
+                            all_player_predictions.append({
+                                'player_name': player_name,
+                                'player_info': {
+                                    'position': player.get('position', ''),
+                                    'jersey_number': player.get('jerseyNumber', ''),
+                                    'status': player.get('status', '')
+                                },
+                                'predictions': player_predictions
+                            })
+                            
+                    except Exception as e:
+                        logger.error(f"❌ Error prediciendo {player_name}: {e}")
+                        
         except Exception as e:
             logger.error(f"❌ Error en predicciones de jugadores: {e}")
             
@@ -318,36 +357,43 @@ class UnifiedPredictor:
 
     def _predict_single_player(self, game_data: Dict[str, Any], player_name: str) -> Dict[str, Any]:
         """
-        Hacer todas las predicciones para un jugador específico
+        Hacer todas las predicciones para un jugador específico EN PARALELO
         REGLA: NO mostrar predicciones con valor 0 (puntos, asistencias, rebotes, triples)
         """
         predictions = {}
         
         try:
-            # PTS - Solo mostrar si > 0
-            pts_result = self.pts_predictor.predict_game(game_data, player_name)
-            if pts_result is not None and self._is_valid_prediction(pts_result, 'points'):
-                predictions['points'] = pts_result
+            # Definir tareas de predicción de jugador
+            player_tasks = {
+                'points': lambda: self.pts_predictor.predict_game(game_data, player_name),
+                'three_points': lambda: self.threept_predictor.predict_game(game_data, player_name),
+                'assists': lambda: self.ast_predictor.predict_game(game_data, player_name),
+                'rebounds': lambda: self.trb_predictor.predict_game(game_data, player_name),
+                'double_double': lambda: self.dd_predictor.predict_game(game_data, player_name)
+            }
             
-            # 3PT - Solo mostrar si > 0
-            threept_result = self.threept_predictor.predict_game(game_data, player_name)
-            if threept_result is not None and self._is_valid_prediction(threept_result, 'three_points'):
-                predictions['three_points'] = threept_result
-            
-            # AST - Solo mostrar si > 0
-            ast_result = self.ast_predictor.predict_game(game_data, player_name)
-            if ast_result is not None and self._is_valid_prediction(ast_result, 'assists'):
-                predictions['assists'] = ast_result
-            
-            # TRB - Solo mostrar si > 0
-            trb_result = self.trb_predictor.predict_game(game_data, player_name)
-            if trb_result is not None and self._is_valid_prediction(trb_result, 'rebounds'):
-                predictions['rebounds'] = trb_result
-            
-            # Double Double - Solo mostrar si es YES (nunca NO)
-            dd_result = self.dd_predictor.predict_game(game_data, player_name)
-            if dd_result is not None and dd_result.get('bet_line') == 'yes':
-                predictions['double_double'] = dd_result
+            # Ejecutar todas las predicciones del jugador en paralelo
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_task = {
+                    executor.submit(task_func): task_name 
+                    for task_name, task_func in player_tasks.items()
+                }
+                
+                for future in as_completed(future_to_task):
+                    task_name = future_to_task[future]
+                    try:
+                        result = future.result()
+                        
+                        # Validar y agregar resultado según el tipo
+                        if task_name == 'double_double':
+                            if result is not None and result.get('bet_line') == 'yes':
+                                predictions[task_name] = result
+                        else:
+                            if result is not None and self._is_valid_prediction(result, task_name):
+                                predictions[task_name] = result
+                                
+                    except Exception as e:
+                        logger.error(f"❌ Error en predicción {task_name} para {player_name}: {e}")
                 
         except Exception as e:
             logger.error(f"❌ Error prediciendo {player_name}: {e}")

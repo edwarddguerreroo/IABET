@@ -44,7 +44,7 @@ from app.architectures.basketball.src.models.players.double_double.dd_model impo
 from app.architectures.basketball.src.preprocessing.data_loader import NBADataLoader
 from app.architectures.basketball.pipelines.predict.utils_predict.game_adapter import GameDataAdapter
 from app.architectures.basketball.pipelines.predict.utils_predict.common_utils import CommonUtils
-from app.architectures.basketball.pipelines.predict.utils_predict.confidence_predict import PlayersConfidence
+from app.architectures.basketball.pipelines.predict.utils_predict.confidence.confidence_players import PlayersConfidence
 
 logger = logging.getLogger(__name__)
 

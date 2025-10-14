@@ -40,7 +40,7 @@ from app.architectures.basketball.src.models.players.pts.model_pts import XGBoos
 from app.architectures.basketball.src.preprocessing.data_loader import NBADataLoader
 from app.architectures.basketball.pipelines.predict.utils_predict.game_adapter import GameDataAdapter
 from app.architectures.basketball.pipelines.predict.utils_predict.common_utils import CommonUtils
-from app.architectures.basketball.pipelines.predict.utils_predict.confidence_predict import PlayersConfidence
+from app.architectures.basketball.pipelines.predict.utils_predict.confidence.confidence_players import PlayersConfidence
 
 logger = logging.getLogger(__name__)
 
@@ -321,7 +321,8 @@ class PTSPredictor:
                 player_data=player_data,
                 opponent_team=player_data.get('Opp', 'Unknown'),
                 game_date=player_data.get('Date'),
-                game_data=game_data  # Datos en tiempo real
+                game_data=game_data,  # Datos en tiempo real
+                target_stat='points'  # Estadística objetivo: puntos
             )
             
             # APLICAR FACTOR H2H A LA PREDICCIÓN CON LÍMITE REALISTA

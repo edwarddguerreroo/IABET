@@ -39,7 +39,7 @@ sys.path.insert(0, basketball_dir)
 from app.architectures.basketball.src.preprocessing.data_loader import NBADataLoader
 from app.architectures.basketball.pipelines.predict.utils_predict.game_adapter import GameDataAdapter
 from app.architectures.basketball.pipelines.predict.utils_predict.common_utils import CommonUtils
-from app.architectures.basketball.pipelines.predict.utils_predict.confidence_predict import TeamsConfidence
+from app.architectures.basketball.pipelines.predict.utils_predict.confidence.confidence_teams import TeamsConfidence
 from app.architectures.basketball.pipelines.predict.teams.ht_teams_points_predict import HalfTimeTeamsPointsPredictor
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class HalfTimeTotalPointsPredictor:
         self.common_utils = CommonUtils()
         self.confidence_calculator = TeamsConfidence()  # Calculadora de confianza centralizada
         self.is_loaded = False
-        self.conservative_tolerance = -2  # Tolerancia conservadora para total halftime
+        self.conservative_tolerance = 0  # Tolerancia conservadora para total halftime
         
         # Inicializar predictor de halftime equipos
         self.halftime_teams_predictor = HalfTimeTeamsPointsPredictor(teams_df)
@@ -117,10 +117,14 @@ class HalfTimeTotalPointsPredictor:
         
         try:
             # Obtener información de equipos desde game_data
-            home_team = game_data.get('homeTeam', {}).get('name', 'Home Team')
-            away_team = game_data.get('awayTeam', {}).get('name', 'Away Team')
+            home_team_name = game_data.get('homeTeam', {}).get('name', 'Home Team')
+            away_team_name = game_data.get('awayTeam', {}).get('name', 'Away Team')
             
-            logger.info(f"🔄 Calculando Total Points Halftime: {home_team} vs {away_team}")
+            # Convertir nombres completos a abreviaciones para búsqueda en dataset
+            home_team = self.common_utils._get_team_abbreviation(home_team_name)
+            away_team = self.common_utils._get_team_abbreviation(away_team_name)
+            
+            logger.info(f"🔄 Calculando Total Points Halftime: {home_team_name} ({home_team}) vs {away_team_name} ({away_team})")
             
             # PASO 1: Obtener predicciones de ambos equipos usando HalfTimeTeamsPointsPredictor
             halftime_predictions = self.halftime_teams_predictor.predict_game(game_data)
@@ -140,7 +144,7 @@ class HalfTimeTotalPointsPredictor:
             home_ht_points = float(home_prediction.get('bet_line', 0))
             away_ht_points = float(away_prediction.get('bet_line', 0))
             
-            logger.info(f"📊 Predicciones halftime individuales: {home_team}={home_ht_points}, {away_team}={away_ht_points}")
+            logger.info(f"📊 Predicciones halftime individuales: {home_team_name}={home_ht_points}, {away_team_name}={away_ht_points}")
             
             # PASO 3: Sumar predicciones para obtener total halftime
             base_total_ht = home_ht_points + away_ht_points
@@ -148,10 +152,18 @@ class HalfTimeTotalPointsPredictor:
             # PASO 4: Aplicar tolerancia conservadora específica para Total Points Halftime
             final_total_ht = base_total_ht + self.conservative_tolerance
             
-            # PASO 5: Calcular confianza promedio
+            # PASO 5: Calcular confianza usando método específico para halftime total points
             home_confidence = home_prediction.get('confidence_percentage', 65.0)
             away_confidence = away_prediction.get('confidence_percentage', 65.0)
-            avg_confidence = (home_confidence + away_confidence) / 2.0
+            
+            # Usar método específico para halftime total points
+            avg_confidence = self.confidence_calculator.calculate_halftime_total_points_confidence(
+                home_confidence=home_confidence,
+                away_confidence=away_confidence,
+                home_team=home_team,
+                away_team=away_team,
+                game_data=game_data
+            )
             
             logger.info(f"📊 Total Points Halftime calculado: {home_ht_points} + {away_ht_points} + ({self.conservative_tolerance}) = {final_total_ht}")
             
@@ -224,8 +236,8 @@ class HalfTimeTotalPointsPredictor:
                         h2h_ht_totals.append(total_h2h_ht)
                 
             return {
-                "home_team": home_team,
-                "away_team": away_team,
+                "home_team": home_team_name,
+                "away_team": away_team_name,
                 "target_type": "HT",
                 "target_name": "total points",
                 "bet_line": str(int(final_total_ht)),

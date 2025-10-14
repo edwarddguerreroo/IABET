@@ -87,6 +87,13 @@ class NBADataLoader:
         teams_data = self._preprocess_teams_data(teams_data)
         biometrics = self._preprocess_biometrics(biometrics)
         
+        # Agregar columna HT (halftime) a teams_data si no existe
+        if 'HT' not in teams_data.columns:
+            logger.info("Agregando columna HT (halftime) a teams_total...")
+            teams_quarters_data = pd.read_csv(self.teams_quarters_path)
+            ht_target_df = self._generate_halftime_target(teams_quarters_data)
+            teams_data = self._merge_halftime_target(teams_data, ht_target_df)
+        
         # Merge de jugadores con biometrics
         players_data = self._merge_players_with_biometrics(players_data, biometrics)
         
@@ -385,11 +392,15 @@ class NBADataLoader:
         """
         logger.info("Haciendo merge del target HT con datos totales...")
         
-        # Hacer merge por Team, game_id y Date
+        # Convertir Date a datetime en ambos DataFrames para el merge
+        teams_total_df['Date'] = pd.to_datetime(teams_total_df['Date'], format='mixed')
+        ht_target_df['Date'] = pd.to_datetime(ht_target_df['Date'], format='mixed')
+        
+        # Hacer merge por Team y Date (sin game_id ya que pueden ser diferentes)
         merged_df = pd.merge(
             teams_total_df,
-            ht_target_df[['Team', 'game_id', 'Date', 'HT']],
-            on=['Team', 'game_id', 'Date'],
+            ht_target_df[['Team', 'Date', 'HT']],
+            on=['Team', 'Date'],
             how='left'
         )
         
@@ -397,14 +408,6 @@ class NBADataLoader:
         original_count = len(teams_total_df)
         merged_count = len(merged_df)
         ht_available = merged_df['HT'].notna().sum()
-        
-        if merged_count != original_count:
-            logger.warning(f"Merge cambió número de registros: {original_count} -> {merged_count}")
-        
-        logger.info(f"Merge completado:")
-        logger.info(f"    Registros originales: {original_count:,}")
-        logger.info(f"    Registros con HT: {ht_available:,}")
-        logger.info(f"    Cobertura HT: {ht_available/original_count*100:.1f}%")
         
         return merged_df
 

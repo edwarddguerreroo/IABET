@@ -80,10 +80,10 @@ DEFAULT_CONFIG = {
         # Endpoints para Team Odds - VERIFICADOS ✅
         'endpoints': {
             # Team Odds por fecha (mejor opción)
-            'team_odds_by_date': 'en/sports/{sport_id}/schedules/{date}/sport_event_markets',  # ✅ VERIFICADO - 142KB, 31 mercados, 2 eventos
+            'team_odds_by_date': 'en/sports/{sport_id}/schedules/{date}/sport_event_markets.json',  # ✅ VERIFICADO - 123KB, funciona con .json
             
             # Team Odds por evento específico
-            'team_odds_by_event': 'en/sport_events/{event_id}/sport_event_markets',  # ✅ VERIFICADO - 77KB
+            'team_odds_by_event': 'en/sport_events/{event_id}/sport_event_markets.json',  # ✅ VERIFICADO - funciona con .json
         },
         
         # Market IDs reales para equipos - VERIFICADOS ✅
@@ -92,36 +92,32 @@ DEFAULT_CONFIG = {
             'total_points': 'sr:market:225',  # total (incl. overtime)
             'home_points': 'sr:market:227',   # home total (incl. overtime)
             'away_points': 'sr:market:228',   # away total (incl. overtime)
+            
+            # Halftime markets - VERIFICADOS ✅
+            'ht_total_points': 'sr:market:68',    # 1st half - total (puntos totales HT)
+            'ht_teams_points': 'sr:market:66',    # 1st half - handicap (puntos por equipo HT)
         },
         
         # Mapeo de targets a nombres de mercados - VERIFICADOS ✅
         'target_to_market': {
             'is_win': ['winner (incl. overtime)'],
             'total_points': ['total (incl. overtime)'],
-            'teams_points': ['home total (incl. overtime)', 'away total (incl. overtime)']
+            'teams_points': ['home total (incl. overtime)', 'away total (incl. overtime)'],
+            
+            # Halftime markets - VERIFICADOS ✅
+            'ht_total_points': ['1st half - total'],
+            'ht_teams_points': ['1st half - handicap']
         }
     },
-    
-    'betting': {
-        'minimum_edge': 0.04,          # 4% mínimo de ventaja
-        'confidence_threshold': 0.96,  # 96% confianza mínima
-        'max_kelly_fraction': 0.25,    # Máximo 25% del bankroll
-        'min_odds': 1.5,               # Odds mínimas aceptables
-        'max_odds': 10.0,              # Odds máximas aceptables
-        'default_bankroll': 1000.0,    # Bankroll por defecto
-        'min_bet_amount': 10.0,        # Apuesta mínima
-        'max_bet_amount': 500.0        # Apuesta máxima
-    },
+
     'data': {
         'cache_enabled': True,
         'cache_duration_hours': 1,
-        'cache_directory': 'data/cache/bookmakers',
+        'cache_directory': 'app/architectures/data/cache/bookmakers',
         'cache_cleanup_enabled': True,
         'cache_cleanup_interval_hours': 24,
         'cache_max_entries': 10000,
         'cache_stats_enabled': True,
-        'simulate_when_no_data': False,  # DESHABILITADO - Solo datos reales
-        'simulation_variance': 0.15,    # 15% varianza en simulación
         'min_historical_games': 5       # Mínimo de juegos para análisis
     },
     'analysis': {

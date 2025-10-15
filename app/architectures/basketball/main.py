@@ -23,7 +23,7 @@ import os
 import sys
 import warnings
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import traceback
 
@@ -31,6 +31,7 @@ import traceback
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
 
 import pandas as pd
+from app.utils.helpers import convert_numpy_types
 import numpy as np
 from tqdm import tqdm
 
@@ -45,6 +46,8 @@ from app.architectures.basketball.pipelines.trainers.players.trainer_dd import D
 # Imports de trainers de equipos
 from app.architectures.basketball.pipelines.trainers.teams.trainer_teams_points import TeamsPointsTrainer
 
+# Import del predictor unificado
+from app.architectures.basketball.pipelines.predict.unified_predictor.unified_predictor import UnifiedPredictor
 
 # Import locales
 from app.models.game import Game
@@ -447,51 +450,73 @@ class NBAPredict:
     Sistema Unificado de Predicción NBA - Punto de Inicialización
     
     Clase principal para recibir el insumo del juego (Game) y orquestar
-    todas las predicciones del sistema NBA.
+    todas las predicciones del sistema NBA usando el UnifiedPredictor.
     """
     
-    def __init__(self):
+    def __init__(self, auto_load: bool = True):
         """
         Inicializa el sistema de predicciones NBA.
-        """
-        # Inicialización de predictores
-        self.predictors_loaded = False
-        self.player_predictors = {}
-        self.team_predictors = {}
         
-    def predict(self, game: Game) -> Dict[str, Any]:
+        Args:
+            auto_load: Si cargar automáticamente los modelos al inicializar
+        """
+        logger.info("🚀 Inicializando NBAPredict...")
+        
+        # Inicializar predictor unificado
+        self.unified_predictor = UnifiedPredictor()
+        self.predictors_loaded = False
+        
+        # Cargar modelos si se solicita
+        if auto_load:
+            self.load_models()
+    
+    def load_models(self) -> bool:
+        """
+        Carga todos los modelos del sistema.
+        
+        Returns:
+            bool: True si todos los modelos se cargaron exitosamente
+        """
+        try:
+            logger.info("📂 Cargando todos los modelos del sistema...")
+            
+            if self.unified_predictor.load_all_models():
+                self.predictors_loaded = True
+                logger.info("✅ Todos los modelos cargados exitosamente")
+                return True
+            else:
+                logger.error("❌ Error cargando algunos modelos")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error cargando modelos: {e}")
+            return False
+    
+    def predict(self, data: Union[Dict[str, Any], List[Dict[str, Any]]]) -> Dict[str, Any]:
         """
         Punto de entrada principal para predicciones.
-        
-        Args:
-            game (Game): Información completa del partido
+        Maneja tanto un solo juego como múltiples juegos usando UnifiedPredictor.
+        Espera datos ya convertidos a formato SportRadar.
+        """
+        try:
+            # Validar que los modelos estén cargados
+            if not self.predictors_loaded:
+                logger.warning("⚠️ Modelos no cargados. Intentando cargar...")
+                if not self.load_models():
+                    return {'error': 'No se pudieron cargar los modelos', 'status': 'error'}
             
-        Returns:
-            Dict[str, Any]: Predicciones completas del sistema
-        """
-        # TODO: Implementar lógica de predicción
-        pass
-        
-    def _load_predictors(self):
-        """
-        Carga todos los predictores del sistema.
-        """
-        # TODO: Cargar predictores de jugadores y equipos
-        pass
-        
-    def _validate_game_data(self, game: Game) -> bool:
-        """
-        Valida que los datos del juego sean correctos.
-        
-        Args:
-            game (Game): Datos del juego a validar
+            # Usar el método unificado de UnifiedPredictor
+            result = self.unified_predictor.predict(data)
             
-        Returns:
-            bool: True si los datos son válidos
-        """
-        # TODO: Implementar validación
-        pass
+            # Limpiar datos numpy para serialización JSON usando función existente
+            return convert_numpy_types(result)
+            
+        except Exception as e:
+            logger.error(f"❌ Error en predicción: {e}")
+            return {'error': str(e), 'status': 'error'}
     
+    
+
 
 def main():
     """

@@ -31,6 +31,7 @@ from pathlib import Path
 import joblib
 import json
 import os
+from scipy import stats
 
 # CONFIGURACIÓN CRÍTICA PARA WINDOWS - EVITAR ERRORES DE PARALELIZACIÓN
 os.environ['LOKY_MAX_CPU_COUNT'] = '1'
@@ -355,7 +356,7 @@ class StackingTRBModel:
             raise ValueError("No se pudieron generar features para TRB")
         
         logger.info(f"Features seleccionadas: {len(features)}")
-        
+
         # Preparar datos (ahora df tiene las features)
         X = df[features].fillna(0)
         y = df['rebounds']
@@ -372,7 +373,7 @@ class StackingTRBModel:
         X_test = test_data[selected_features].fillna(0)
         y_test = test_data['rebounds']
         
-        # 🔧 CRÍTICO: Entrenar el scaler con los datos de entrenamiento
+        # Entrenar el scaler con los datos de entrenamiento
         logger.info("Entrenando StandardScaler...")
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_test_scaled = self.scaler.transform(X_test)
@@ -767,14 +768,17 @@ class StackingTRBModel:
             # 2. Asegurar que sean no negativas
             predictions = np.maximum(predictions, 0)
             
-            # 3. Convertir a enteros usando redondeo probabilístico
-            predictions_int = np.zeros_like(predictions)
-            for i, pred in enumerate(predictions):
+            # 3. CALIBRACIÓN POR RANGOS basada en análisis detallado
+            predictions_calibrated = self._apply_range_specific_calibration(predictions)
+            
+            # 4. Convertir a enteros usando redondeo probabilístico
+            predictions_int = np.zeros_like(predictions_calibrated)
+            for i, pred in enumerate(predictions_calibrated):
                 floor_val = int(np.floor(pred))
                 prob = pred - floor_val
                 predictions_int[i] = floor_val + np.random.binomial(1, prob)
             
-            # 4. Aplicar límites finales para rebotes (sin límite superior artificial)
+            # 5. Aplicar límites finales para rebotes (sin límite superior artificial)
             predictions_int = np.maximum(predictions_int, 0)  # Solo evitar negativos
             
             return predictions_int.astype(int)
@@ -784,6 +788,35 @@ class StackingTRBModel:
             # Fallback: solo redondear y limitar
             predictions = np.maximum(predictions, 0)
             return np.round(np.maximum(predictions, 0)).astype(int)  # Sin límite superior
+    
+    def _apply_range_specific_calibration(self, predictions: np.ndarray) -> np.ndarray:
+        """
+        Aplica calibración específica por rangos de predicción basada en análisis detallado
+        """
+        calibrated = predictions.copy()
+        
+        # Rangos y factores de calibración basados en el análisis
+        calibration_ranges = [
+            (0, 3, 0.7),      # Muy Bajo: reducir sobreestimación (+71.1% bias)
+            (4, 6, 1.05),     # Bajo: ligero ajuste para mejorar R²
+            (7, 9, 1.08),     # Medio-Bajo: ajuste para mejorar R²
+            (10, 12, 1.12),   # Medio: ajuste para mejorar R²
+            (13, 15, 1.15),   # Medio-Alto: reducir subestimación (-11.2% bias)
+            (16, 20, 1.25),   # Alto: reducir subestimación (-26.4% bias)
+            (21, 50, 1.35)    # Muy Alto: reducir subestimación extrema
+        ]
+        
+        for min_val, max_val, factor in calibration_ranges:
+            if max_val == 50:  # Para el rango extremo
+                mask = predictions >= min_val
+            else:
+                mask = (predictions >= min_val) & (predictions < max_val)
+            
+            if mask.sum() > 0:
+                calibrated[mask] = predictions[mask] * factor
+                logger.debug(f"Calibración rango {min_val}-{max_val}: {mask.sum()} predicciones, factor {factor}")
+        
+        return calibrated
     
     def save_model(self, filepath: str):
         """Guardar modelo entrenado completo con scaler y metadata"""

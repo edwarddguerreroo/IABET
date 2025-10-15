@@ -1,6 +1,6 @@
 # app/models/game.py
 from __future__ import annotations
-from typing import List, Optional
+from typing import List, Optional, Union
 from datetime import datetime, date
 from pydantic import BaseModel, Field
 
@@ -28,7 +28,7 @@ class Team(BaseModel):
     conference: Optional[str] = None
     division: Optional[str] = None
     score: int
-    record: Optional[str] = None
+    record: Optional[Union[str, dict]] = None
     players: List[Player] = Field(default_factory=list)
 
 class Venue(BaseModel):

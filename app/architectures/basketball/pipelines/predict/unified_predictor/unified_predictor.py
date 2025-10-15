@@ -148,6 +148,39 @@ class UnifiedPredictor:
             logger.error(f"❌ Error cargando modelos: {e}")
             return False
 
+    def predict(self, data: Union[Dict[str, Any], List[Dict[str, Any]]], max_workers: int = 8) -> Dict[str, Any]:
+        """
+        Método unificado para predicciones que maneja tanto un solo juego como múltiples juegos.
+        
+        Args:
+            data: Datos del juego (dict) o lista de juegos (list) en formato SportRadar
+            max_workers: Número máximo de hilos paralelos para múltiples juegos (default: 8)
+            
+        Returns:
+            Dict con predicciones del juego o juegos
+        """
+        if not self.is_loaded:
+            logger.error("❌ Modelos no cargados. Ejecutar load_all_models() primero.")
+            return {'error': 'Modelos no cargados'}
+        
+        try:
+            # Detectar si es un solo juego o múltiples juegos
+            if isinstance(data, dict):
+                # Un solo juego
+                logger.info("🎯 Predicción de un solo juego")
+                return self.predict_single_game(data)
+            elif isinstance(data, list):
+                # Múltiples juegos
+                logger.info(f"🚀 Predicción de {len(data)} juegos en paralelo")
+                return self.predict_games(data, max_workers)
+            else:
+                logger.error(f"❌ Tipo de datos no válido: {type(data)}")
+                return {'error': f'Tipo de datos no válido: {type(data)}'}
+                
+        except Exception as e:
+            logger.error(f"❌ Error en predicción unificada: {e}")
+            return {'error': str(e)}
+
     def predict_games(self, games_data: List[Dict[str, Any]], max_workers: int = 8) -> Dict[str, Any]:
         """
         Predecir múltiples juegos EN PARALELO para máxima velocidad
@@ -594,9 +627,9 @@ def test_unified_predictor():
         print("❌ Error cargando modelos")
         return False
     
-    # Hacer predicciones para todos los juegos
-    print("\n🎯 Haciendo predicciones para todos los juegos...")
-    all_predictions = predictor.predict_games(test_games_data)
+    # Hacer predicciones usando el método unificado
+    print("\n🎯 Haciendo predicciones usando método unificado...")
+    all_predictions = predictor.predict(test_games_data)
     
     # Mostrar resultados
     print("\n📋 RESULTADOS COMPLETOS:")

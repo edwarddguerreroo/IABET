@@ -151,11 +151,32 @@ class PTSPredictor:
             is_started = self.common_utils._get_is_started_from_sportradar(game_data, target_player)
             current_team = self.common_utils._get_current_team_from_sportradar(game_data, target_player)
             
+            # Extraer oponente correcto del juego actual
+            home_team_name = game_data.get('homeTeam', {}).get('name', '')
+            away_team_name = game_data.get('awayTeam', {}).get('name', '')
+            home_team_abbr = self.common_utils._get_team_abbreviation(home_team_name)
+            away_team_abbr = self.common_utils._get_team_abbreviation(away_team_name)
+            current_team_abbr = self.common_utils._get_team_abbreviation(current_team)
+            
+            # Determinar el oponente correcto
+            if current_team_abbr == home_team_abbr:
+                opponent_team = away_team_abbr
+                opponent_team_id = game_data.get('awayTeam', {}).get('teamId', '')
+            elif current_team_abbr == away_team_abbr:
+                opponent_team = home_team_abbr
+                opponent_team_id = game_data.get('homeTeam', {}).get('teamId', '')
+            else:
+                # Fallback a datos históricos si no coincide
+                opponent_team = player_data.get('Opp', 'Unknown')
+                opponent_team_id = ''
+            
             # Agregar información extraída al player_data
             player_data['is_home'] = is_home
             player_data['is_started'] = is_started
             player_data['current_team'] = current_team
             player_data['player_name'] = target_player
+            player_data['opponent_team'] = opponent_team  # Oponente correcto del juego actual
+            player_data['opponent_team_id'] = opponent_team_id  # ID del oponente
             
             # 7. CORREGIR FORMATO DE FECHA
             if 'Date' in player_data and pd.notna(player_data['Date']):
@@ -303,9 +324,11 @@ class PTSPredictor:
             stabilized_prediction = (raw_prediction * 0.70) + (actual_stats_mean * 0.30)
             
             # CALCULAR ESTADÍSTICAS H2H DETALLADAS
+            # Usar opponent_team del juego actual si está disponible, sino usar histórico
+            opponent_for_h2h = player_data.get('opponent_team', player_data.get('Opp', 'Unknown'))
             h2h_stats = self.confidence_calculator.calculate_player_h2h_stats(
                 player_name=player_name,
-                opponent_team=player_data.get('Opp', 'Unknown'),
+                opponent_team=opponent_for_h2h,
                 target_stat='points',
                 max_games=10
             )
@@ -319,7 +342,7 @@ class PTSPredictor:
                 actual_stats_std=actual_stats_std,
                 historical_games=len(player_historical),
                 player_data=player_data,
-                opponent_team=player_data.get('Opp', 'Unknown'),
+                opponent_team=opponent_for_h2h,
                 game_date=player_data.get('Date'),
                 game_data=game_data,  # Datos en tiempo real
                 target_stat='points'  # Estadística objetivo: puntos
@@ -333,27 +356,6 @@ class PTSPredictor:
                 logger.info(f"🎯 Aplicando factor H2H {h2h_factor:.3f} a predicción: {raw_prediction:.1f} -> {raw_prediction_adjusted:.1f}")
             else:
                 raw_prediction_adjusted = raw_prediction
-            
-            # LÍMITE REALISTA BASADO EN HISTÓRICO DEL JUGADOR
-            # Evitar predicciones excesivamente altas para jugadores específicos
-            historical_mean = actual_stats_mean
-            historical_std = actual_stats_std
-            
-            # Límite máximo basado en percentil 95 del histórico del jugador
-            max_realistic = historical_mean + (2 * historical_std)  # ~95% de los juegos históricos
-            
-            # Aplicar límite más conservador para jugadores elite
-            if historical_mean >= 20:  # Jugadores elite (20+ pts promedio)
-                max_realistic = min(max_realistic, historical_mean + (0.8 * historical_std))  # Más conservador
-            
-            # Aplicar límite absoluto máximo
-            max_realistic = min(max_realistic, 45)  # Límite absoluto NBA moderno
-            
-            logger.info(f"🎯 Límite realista calculado para {player_name}: {max_realistic:.1f} pts (histórico: {historical_mean:.1f}±{historical_std:.1f})")
-            
-            if raw_prediction_adjusted > max_realistic:
-                logger.info(f"🎯 Limitando predicción de {raw_prediction_adjusted:.1f} a {max_realistic:.1f} (basado en histórico)")
-                raw_prediction_adjusted = max_realistic
             
             # APLICAR TOLERANCIA INDIVIDUAL DEL PREDICTOR
             pts_prediction = max(0, raw_prediction_adjusted + self.tolerance)  # No permitir valores negativos
@@ -372,8 +374,8 @@ class PTSPredictor:
                     'player': player_name,
                     'team_id': self.common_utils._get_team_id(player_data.get('Team', 'Unknown')),
                     'team': player_data.get('Team', 'Unknown'),
-                    'opponent_id': self.common_utils._get_team_id(player_data.get('Opp', 'Unknown')),
-                    'opponent': player_data.get('Opp', 'Unknown'),
+                    'opponent_id': player_data.get('opponent_team_id', self.common_utils._get_team_id(player_data.get('Opp', 'Unknown'))),
+                    'opponent': opponent_for_h2h,
                     'tolerance_applied': self.tolerance,
                     'historical_games_used': len(player_historical),
                     'raw_prediction': round(raw_prediction, 1),
@@ -402,7 +404,7 @@ class PTSPredictor:
                         'recent_form': round(recent_form, 1)
                     },
                     'performance_metrics': {
-                        'stabilized_prediction': round(stabilized_prediction, 1),
+                        'stabilized_prediction': round(raw_prediction_adjusted, 1),
                         'confidence_factors': {
                             'tolerance': self.tolerance,
                             'historical_games': len(player_historical),

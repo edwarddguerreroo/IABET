@@ -100,6 +100,9 @@ class PointsFeatureEngineer:
             else:
                 result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
             
+            # Reset del MultiIndex a índice simple antes de reindex
+            result = result.reset_index(level=0, drop=True)
+            
             # Asegurar que el índice coincida con el DataFrame original
             result = result.reindex(df.index, fill_value=0)
         

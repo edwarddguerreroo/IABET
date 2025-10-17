@@ -244,8 +244,8 @@ class HalfTimeTotalPointsPredictor:
                 "bet_type": "points",
                 "confidence_percentage": round(avg_confidence, 1),
                 "prediction_details": {
-                    "home_team_id": self.common_utils._get_team_id(home_team),
-                    "away_team_id": self.common_utils._get_team_id(away_team),
+                    "home_team_id": game_data.get('homeTeam', {}).get('teamId', self.common_utils._get_team_id(home_team)) if game_data else self.common_utils._get_team_id(home_team),
+                    "away_team_id": game_data.get('awayTeam', {}).get('teamId', self.common_utils._get_team_id(away_team)) if game_data else self.common_utils._get_team_id(away_team),
                     "home_ht_points": home_ht_points,
                     "away_ht_points": away_ht_points,
                     "base_total_ht": home_ht_points + away_ht_points,

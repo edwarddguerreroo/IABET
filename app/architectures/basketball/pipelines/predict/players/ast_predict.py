@@ -70,7 +70,7 @@ class ASTPredictor:
         self.common_utils = CommonUtils()
         self.confidence_calculator = PlayersConfidence()
         self.is_loaded = False
-        self.tolerance = -1  # Tolerancia conservadora individual
+        self.tolerance = -2  # Tolerancia conservadora individual
 
         # Cargar datos y modelo automáticamente
         self.load_data_and_model()
@@ -159,11 +159,32 @@ class ASTPredictor:
             is_home = self.common_utils._get_is_home_from_sportradar(game_data, target_player)
             is_started = self.common_utils._get_is_started_from_sportradar(game_data, target_player)
             current_team = self.common_utils._get_current_team_from_sportradar(game_data, target_player)
+            
+            # Extraer oponente correcto del juego actual
+            home_team_name = game_data.get('homeTeam', {}).get('name', '')
+            away_team_name = game_data.get('awayTeam', {}).get('name', '')
+            home_team_abbr = self.common_utils._get_team_abbreviation(home_team_name)
+            away_team_abbr = self.common_utils._get_team_abbreviation(away_team_name)
+            current_team_abbr = self.common_utils._get_team_abbreviation(current_team)
+            
+            # Determinar el oponente correcto
+            if current_team_abbr == home_team_abbr:
+                opponent_team = away_team_abbr
+                opponent_team_id = game_data.get('awayTeam', {}).get('teamId', '')
+            elif current_team_abbr == away_team_abbr:
+                opponent_team = home_team_abbr
+                opponent_team_id = game_data.get('homeTeam', {}).get('teamId', '')
+            else:
+                # Fallback a datos históricos si no coincide
+                opponent_team = player_data.get('Opp', 'Unknown')
+                opponent_team_id = ''
            
             # Agregar información extraída al player_data
             player_data['is_home'] = is_home
             player_data['is_started'] = is_started
             player_data['current_team'] = current_team
+            player_data['opponent_team'] = opponent_team  # Oponente correcto del juego actual
+            player_data['opponent_team_id'] = opponent_team_id  # ID del oponente
 
             # Corregir formato de fecha para evitar problemas de timezone
             if 'Date' in player_data and pd.notna(player_data['Date']):
@@ -261,21 +282,18 @@ class ASTPredictor:
             # Hacer predicción 
             predictions = self.model.predict(combined_df)
             
-            # Usar promedio de las últimas predicciones basadas en histórico
+            # Extraer la última predicción (corresponde al último juego histórico, el más reciente)
             if len(predictions) > 0:
-                # Tomar promedio de las últimas 5 predicciones para mayor estabilidad
+                raw_prediction = predictions[-1]
                 recent_predictions = predictions[-5:] if len(predictions) >= 5 else predictions
-                raw_prediction = np.mean(recent_predictions)
             else:
                 raw_prediction = 0
+                recent_predictions = []
             
             # Calcular estadísticas para confianza
             actual_stats_mean = player_historical['assists'].mean() if len(player_historical) > 0 else 0
             actual_stats_std = player_historical['assists'].std() if len(player_historical) > 0 else 0
             prediction_std = np.std(recent_predictions) if len(recent_predictions) > 1 else 0
-            
-            # Calcular predicción estabilizada (85% modelo + 15% histórico)
-            stabilized_prediction = (raw_prediction * 0.85) + (actual_stats_mean * 0.15)
             
             # CALCULAR ESTADÍSTICAS DETALLADAS PARA PREDICTION_DETAILS
             # Últimos 5 juegos
@@ -314,9 +332,11 @@ class ASTPredictor:
             recent_form = player_historical.tail(3)['assists'].mean() if len(player_historical) >= 3 else actual_stats_mean
             
             # CALCULAR ESTADÍSTICAS H2H DETALLADAS
+            # Usar opponent_team del juego actual si está disponible, sino usar histórico
+            opponent_for_h2h = player_data.get('opponent_team', player_data.get('Opp', 'Unknown'))
             h2h_stats = self.confidence_calculator.calculate_player_h2h_stats(
                 player_name=player_name,
-                opponent_team=player_data.get('Opp', 'Unknown'),
+                opponent_team=opponent_for_h2h,
                 target_stat='assists',
                 max_games=50
             )
@@ -332,13 +352,13 @@ class ASTPredictor:
             # Calcular confianza usando PlayersConfidence
             confidence_percentage = self.confidence_calculator.calculate_player_confidence(
                 raw_prediction=raw_prediction,
-                stabilized_prediction=stabilized_prediction,
+                stabilized_prediction=raw_prediction,  # Usar solo la predicción del modelo
                 tolerance=self.tolerance,  # Tolerancia individual del predictor
                 prediction_std=prediction_std,
                 actual_stats_std=actual_stats_std,
                 historical_games=len(player_historical),
                 player_data=player_data,
-                opponent_team=player_data.get('Opp', 'Unknown'),
+                opponent_team=opponent_for_h2h,
                 game_date=player_data.get('Date'),
                 game_data=game_data,  # Datos en tiempo real
                 target_stat='assists'  # Estadística objetivo: asistencias
@@ -360,9 +380,9 @@ class ASTPredictor:
                     'player_id': self.common_utils._get_player_id(self.common_utils._normalize_name(player_name), player_data.get('Team', 'Unknown')),
                     'player': player_name,
                     'team_id': self.common_utils._get_team_id(player_data.get('Team', 'Unknown')),
-                'team': player_data.get('Team', 'Unknown'),
-                    'opponent_id': self.common_utils._get_team_id(player_data.get('Opp', 'Unknown')),
-                'opponent': player_data.get('Opp', 'Unknown'),
+                    'team': player_data.get('Team', 'Unknown'),
+                    'opponent_id': player_data.get('opponent_team_id', self.common_utils._get_team_id(player_data.get('Opp', 'Unknown'))),
+                    'opponent': opponent_for_h2h,
                     'tolerance_applied': self.tolerance,
                     'historical_games_used': len(player_historical),
                     'raw_prediction': raw_prediction,
@@ -379,7 +399,7 @@ class ASTPredictor:
                         'recent_form': round(recent_form, 1)
                     },
                     'performance_metrics': {
-                        'stabilized_prediction': round(stabilized_prediction, 1),
+                        'stabilized_prediction': round(raw_prediction_adjusted, 1),
                         'confidence_factors': {
                             'tolerance': self.tolerance,
                             'historical_games': len(player_historical),

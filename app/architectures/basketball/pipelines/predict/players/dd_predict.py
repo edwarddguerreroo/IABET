@@ -191,10 +191,31 @@ class DoubleDoublePredictor:
             is_started = self.common_utils._get_is_started_from_sportradar(game_data, target_player)
             current_team = self.common_utils._get_current_team_from_sportradar(game_data, target_player)
             
+            # Extraer oponente correcto del juego actual
+            home_team_name = game_data.get('homeTeam', {}).get('name', '')
+            away_team_name = game_data.get('awayTeam', {}).get('name', '')
+            home_team_abbr = self.common_utils._get_team_abbreviation(home_team_name)
+            away_team_abbr = self.common_utils._get_team_abbreviation(away_team_name)
+            current_team_abbr = self.common_utils._get_team_abbreviation(current_team)
+            
+            # Determinar el oponente correcto
+            if current_team_abbr == home_team_abbr:
+                opponent_team = away_team_abbr
+                opponent_team_id = game_data.get('awayTeam', {}).get('teamId', '')
+            elif current_team_abbr == away_team_abbr:
+                opponent_team = home_team_abbr
+                opponent_team_id = game_data.get('homeTeam', {}).get('teamId', '')
+            else:
+                # Fallback a datos históricos si no coincide
+                opponent_team = player_data.get('Opp', 'Unknown')
+                opponent_team_id = ''
+            
             # Agregar información extraída al player_data
             player_data['is_home'] = is_home
             player_data['is_started'] = is_started
             player_data['current_team'] = current_team
+            player_data['opponent_team'] = opponent_team  # Oponente correcto del juego actual
+            player_data['opponent_team_id'] = opponent_team_id  # ID del oponente
             
             # Corregir formato de fecha para evitar problemas de timezone
             if 'Date' in player_data and pd.notna(player_data['Date']):
@@ -392,24 +413,23 @@ class DoubleDoublePredictor:
                 # Volver a lanzar el error para que el flujo principal lo maneje
                 raise prediction_error
             
-            # Usar las predicciones más recientes
+            # Usar la última predicción (corresponde al contexto más reciente)
             if len(predictions) > 0:
-                # Tomar el promedio de las últimas predicciones para estabilidad
-                recent_predictions = predictions[-5:] if len(predictions) >= 5 else predictions
-                recent_probabilities = probabilities[-5:] if len(probabilities) >= 5 else probabilities
+                # Tomar solo la última predicción del modelo
+                final_prediction = int(np.round(predictions[-1]))
                 
-                # Predicción final (mayoría de las predicciones recientes)
-                final_prediction = int(np.round(np.mean(recent_predictions)))
+                # Para probabilidades, también tomar la última
+                recent_probabilities = probabilities[-1:] if len(probabilities) > 0 else probabilities
                 
-                # 🚨 SOLO PREDECIR PARA JUGADORES QUE HARÁN DOUBLE DOUBLE (YES)
+                # SOLO PREDECIR PARA JUGADORES QUE HARÁN DOUBLE DOUBLE (YES)
                 if final_prediction != 1:
                     logger.info(f"❌ No se predice DD para {player_name} (predicción: {final_prediction})")
                     return None  # No hacer predicción para jugadores que no harán DD
                 
                 # Calcular confianza usando sistema avanzado
                 if len(recent_probabilities) > 0 and recent_probabilities.shape[1] >= 2:
-                    avg_probabilities = np.mean(recent_probabilities, axis=0)
-                    probability_yes = avg_probabilities[1]  # Probabilidad de "yes"
+                    # Usar directamente la probabilidad de la última predicción
+                    probability_yes = recent_probabilities[0][1]  # Probabilidad de "yes" de la última predicción
                     
                     # Sistema de confianza avanzado basado en total_points
                     confidence = self._calculate_confidence(
@@ -488,8 +508,8 @@ class DoubleDoublePredictor:
                     'player': player_name,
                     'team_id': self.common_utils._get_team_id(player_data.get('Team', 'Unknown')),
                     'team': player_data.get('Team', 'Unknown'),
-                    'opponent_id': self.common_utils._get_team_id(player_data.get('Opp', 'Unknown')),
-                    'opponent': player_data.get('Opp', 'Unknown'),
+                    'opponent_id': player_data.get('opponent_team_id', self.common_utils._get_team_id(player_data.get('Opp', 'Unknown'))),
+                    'opponent': player_data.get('opponent_team', player_data.get('Opp', 'Unknown')),
                     'tolerance_applied': self.tolerance,
                     'raw_prediction': final_prediction,
                     'h2h_adjusted_prediction': round(raw_prediction_adjusted, 1) if 'raw_prediction_adjusted' in locals() else final_prediction,

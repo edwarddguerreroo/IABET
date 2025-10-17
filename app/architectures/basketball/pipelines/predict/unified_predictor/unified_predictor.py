@@ -344,10 +344,11 @@ class UnifiedPredictor:
             away_players = game_data.get('awayTeam', {}).get('players', [])
             all_players = home_players + away_players
             
-            # Filtrar solo jugadores activos
+            # Filtrar solo jugadores activos (status ACT significa disponible para jugar)
+            # No excluimos por lesiones porque un jugador puede estar ACT aunque tenga lesiones
             active_players = [
                 player for player in all_players 
-                if player.get('status', '') == 'ACT' and not player.get('injuries', [])
+                if player.get('status', '') == 'ACT'
             ]
             
             logger.info(f"🏃 Encontrados {len(active_players)} jugadores activos para predicciones PARALELAS")

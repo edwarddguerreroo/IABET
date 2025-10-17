@@ -349,7 +349,29 @@ class TeamsPointsPredictor:
                 actual_points_std = prediction_std
             
             # FACTOR JUGADORES ESTRELLA - Ajustar predicción basada en ausencias del equipo
-            opponent_name = team_data.get('Opp', 'Unknown')
+            # Extraer oponente REAL del juego actual desde game_data, NO de datos históricos
+            if game_data:
+                home_team_name_from_game = game_data.get('homeTeam', {}).get('name', '')
+                away_team_name_from_game = game_data.get('awayTeam', {}).get('name', '')
+                home_team_abbr_from_game = self.common_utils._get_team_abbreviation(home_team_name_from_game)
+                away_team_abbr_from_game = self.common_utils._get_team_abbreviation(away_team_name_from_game)
+                
+                # Determinar el oponente correcto (usar team_name_abbr en lugar de team_name)
+                if team_name_abbr == home_team_abbr_from_game:
+                    opponent_name = away_team_abbr_from_game
+                    opponent_id = game_data.get('awayTeam', {}).get('teamId', '')
+                elif team_name_abbr == away_team_abbr_from_game:
+                    opponent_name = home_team_abbr_from_game
+                    opponent_id = game_data.get('homeTeam', {}).get('teamId', '')
+                else:
+                    # Fallback a datos históricos
+                    opponent_name = team_data.get('Opp', 'Unknown')
+                    opponent_id = ''
+            else:
+                # Si no hay game_data, usar datos históricos
+                opponent_name = team_data.get('Opp', 'Unknown')
+                opponent_id = ''
+            
             star_player_factor = self.confidence_calculator.calculate_star_player_factor_teams_points(
                 team_name=team_name,
                 opponent_name=opponent_name,
@@ -408,7 +430,7 @@ class TeamsPointsPredictor:
             actual_mean = actual_points_mean_adjusted if 'actual_points_mean_adjusted' in locals() else actual_points_mean
             final_prediction = (raw_prediction_adjusted * 0.80) + (actual_mean * 0.20) + tolerance_used
             
-            team_points_prediction = max(85, final_prediction)  # Límite basado en análisis real del dataset (P1)
+            team_points_prediction = final_prediction  # Usar la predicción directa del modelo
             
             # RECALCULAR CONFIANZA CON VALORES FINALES USANDO CLASE CENTRALIZADA
             confidence_percentage = self.confidence_calculator.calculate_teams_points_confidence(
@@ -457,14 +479,25 @@ class TeamsPointsPredictor:
             # Forma reciente (promedio de últimos 3 juegos)
             recent_form = team_historical.tail(3)['points'].mean() if len(team_historical) >= 3 else actual_points_mean
                 
+            # Obtener team_id correcto (usar team_name_abbr)
+            if game_data:
+                if team_name_abbr == home_team_abbr_from_game:
+                    team_id_final = game_data.get('homeTeam', {}).get('teamId', self.common_utils._get_team_id(team_name))
+                elif team_name_abbr == away_team_abbr_from_game:
+                    team_id_final = game_data.get('awayTeam', {}).get('teamId', self.common_utils._get_team_id(team_name))
+                else:
+                    team_id_final = self.common_utils._get_team_id(team_name)
+            else:
+                team_id_final = self.common_utils._get_team_id(team_name)
+            
             return {
                 'team_points_prediction': int(team_points_prediction),
                 'confidence_percentage': round(confidence_percentage, 1),
                 'prediction_details': {
-                    'team_id': self.common_utils._get_team_id(team_name),
                     'team': team_name,
-                    'opponent_id': self.common_utils._get_team_id(team_data.get('Opp', 'Unknown')),
-                    'opponent': team_data.get('Opp', 'Unknown'),
+                    'team_id': team_id_final,
+                    'opponent': opponent_name,
+                    'opponent_id': opponent_id if game_data else self.common_utils._get_team_id(team_data.get('Opp', 'Unknown')),
                     'tolerance_applied': tolerance_used,
                     'historical_games_used': len(team_historical),
                     'raw_prediction': round(raw_prediction_adjusted, 1),
@@ -533,6 +566,7 @@ def test_teams_points_predictor():
         "scheduled": "2024-01-15T20:00:00Z",
         "status": "scheduled",
         "homeTeam": {
+            "teamId": "583ecfff-fb46-11e1-82cb-f4ce4684ea4c",
             "name": "Oklahoma City Thunder",
             "alias": "OKC",
             "players": [
@@ -557,6 +591,7 @@ def test_teams_points_predictor():
             ]
         },
         "awayTeam": {
+            "teamId": "583ed102-fb46-11e1-82cb-f4ce4684ea4c",
             "name": "Denver Nuggets", 
             "alias": "DEN",
             "players": [

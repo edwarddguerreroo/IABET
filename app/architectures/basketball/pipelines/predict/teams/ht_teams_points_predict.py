@@ -344,7 +344,29 @@ class HalfTimeTeamsPointsPredictor:
                 actual_ht_std = prediction_std
             
             # FACTOR JUGADORES ESTRELLA - Ajustar predicción basada en ausencias del equipo
-            opponent_name = team_data.get('Opp', 'Unknown')
+            # Extraer oponente REAL del juego actual desde game_data, NO de datos históricos
+            if game_data:
+                home_team_name_from_game = game_data.get('homeTeam', {}).get('name', '')
+                away_team_name_from_game = game_data.get('awayTeam', {}).get('name', '')
+                home_team_abbr_from_game = self.common_utils._get_team_abbreviation(home_team_name_from_game)
+                away_team_abbr_from_game = self.common_utils._get_team_abbreviation(away_team_name_from_game)
+                
+                # Determinar el oponente correcto (usar team_name_abbr en lugar de team_name)
+                if team_name_abbr == home_team_abbr_from_game:
+                    opponent_name = away_team_abbr_from_game
+                    opponent_id = game_data.get('awayTeam', {}).get('teamId', '')
+                elif team_name_abbr == away_team_abbr_from_game:
+                    opponent_name = home_team_abbr_from_game
+                    opponent_id = game_data.get('homeTeam', {}).get('teamId', '')
+                else:
+                    # Fallback a datos históricos
+                    opponent_name = team_data.get('Opp', 'Unknown')
+                    opponent_id = ''
+            else:
+                # Si no hay game_data, usar datos históricos
+                opponent_name = team_data.get('Opp', 'Unknown')
+                opponent_id = ''
+            
             star_player_factor = self.confidence_calculator.calculate_star_player_factor_teams_points(
                 team_name=team_name,
                 opponent_name=opponent_name,
@@ -403,7 +425,7 @@ class HalfTimeTeamsPointsPredictor:
             actual_mean = actual_ht_mean_adjusted if 'actual_ht_mean_adjusted' in locals() else actual_ht_mean
             final_prediction = (raw_prediction_adjusted * 0.80) + (actual_mean * 0.20) + tolerance_used
             
-            halftime_prediction = max(10, final_prediction)  # Límite basado en análisis real del dataset HT (10-91)
+            halftime_prediction = final_prediction  # Usar la predicción directa del modelo
             
             # RECALCULAR CONFIANZA CON VALORES FINALES USANDO CLASE CENTRALIZADA
             confidence_percentage = self.confidence_calculator.calculate_halftime_confidence(
@@ -452,14 +474,25 @@ class HalfTimeTeamsPointsPredictor:
             # Forma reciente (promedio de últimos 3 juegos)
             recent_form = team_historical.tail(3)['HT'].mean() if len(team_historical) >= 3 else actual_ht_mean
             
+            # Obtener team_id correcto (usar team_name_abbr)
+            if game_data:
+                if team_name_abbr == home_team_abbr_from_game:
+                    team_id_final = game_data.get('homeTeam', {}).get('teamId', self.common_utils._get_team_id(team_name))
+                elif team_name_abbr == away_team_abbr_from_game:
+                    team_id_final = game_data.get('awayTeam', {}).get('teamId', self.common_utils._get_team_id(team_name))
+                else:
+                    team_id_final = self.common_utils._get_team_id(team_name)
+            else:
+                team_id_final = self.common_utils._get_team_id(team_name)
+            
             return {
                 'halftime_prediction': int(halftime_prediction),
                 'confidence_percentage': round(confidence_percentage, 1),
                 'prediction_details': {
                     'team': team_name,
-                    'team_id': self.common_utils._get_team_id(team_name),
-                    'opponent': team_data.get('Opp', 'Unknown'),
-                    'opponent_id': self.common_utils._get_team_id(team_data.get('Opp', 'Unknown')),
+                    'team_id': team_id_final,
+                    'opponent': opponent_name,
+                    'opponent_id': opponent_id if game_data else self.common_utils._get_team_id(team_data.get('Opp', 'Unknown')),
                     'tolerance_applied': tolerance_used,
                     'historical_games_used': len(team_historical),
                     'raw_prediction': round(raw_prediction_adjusted, 1),

@@ -11,7 +11,6 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Tuple
 import logging
-from app.architectures.basketball.config.logging_config import NBALogger
 from datetime import datetime, timedelta
 import warnings
 from sklearn.preprocessing import StandardScaler
@@ -66,28 +65,40 @@ class DoubleDoubleFeatureEngineer:
         """
         Cálculo rolling optimizado con cache para evitar duplicados
         SIEMPRE usa shift(1) para prevenir data leakage (futuros juegos)
+        MANTIENE alineación de índices con el DataFrame original
         """
-        cache_key = f"{column}_{window}_{operation}"
+        cache_key = f"{column}_{window}_{operation}_{len(df)}"
         
         if cache_key in self._rolling_cache:
-            return self._rolling_cache[cache_key]
+            cached_result = self._rolling_cache[cache_key]
+            # Verificar que el índice coincida con el DataFrame actual
+            if len(cached_result) == len(df) and cached_result.index.equals(df.index):
+                return cached_result
+            else:
+                # Cache obsoleto, eliminarlo
+                del self._rolling_cache[cache_key]
         
         if column not in df.columns:
             result = pd.Series(0, index=df.index)
         else:
             if operation == 'mean':
-                    result = df.groupby('player')[column].rolling(window=window, min_periods=min_periods).mean().shift(1).reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=min_periods).mean().shift(1)
             elif operation == 'std':
-                    result = df.groupby('player')[column].rolling(window=window, min_periods=min_periods).std().shift(1).reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=min_periods).std().shift(1)
             elif operation == 'max':
-                    result = df.groupby('player')[column].rolling(window=window, min_periods=min_periods).max().shift(1).reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=min_periods).max().shift(1)
             elif operation == 'sum':
-                    result = df.groupby('player')[column].rolling(window=window, min_periods=min_periods).sum().shift(1).reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=min_periods).sum().shift(1)
             else:
-                    result = df.groupby('player')[column].rolling(window=window, min_periods=min_periods).mean().shift(1).reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=min_periods).mean().shift(1)
             
+            # CRÍTICO: Reindexar para mantener alineación con el DataFrame original
+            result = result.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
+            
+            # Almacenar en cache
             self._rolling_cache[cache_key] = result
-            return result
+        
+        return result
 
     def _convert_mp_to_numeric(self, df: pd.DataFrame) -> None:
         """Convierte columna MP (minutos jugados) de formato MM:SS a decimal o usa 'minutes' si existe"""
@@ -198,7 +209,7 @@ class DoubleDoubleFeatureEngineer:
         logger.debug(f"Features especializadas: {final_features[:10]}...")  # Mostrar primeras 10
         
         if len(final_features) == 0:
-            logger.error("⚠️ NO se generaron features especializadas!")
+            logger.error(" NO se generaron features especializadas!")
             return []
         
         return final_features
@@ -270,11 +281,15 @@ class DoubleDoubleFeatureEngineer:
                 if stat in df.columns:
                     # Promedio histórico básico
                     stat_hist_avg = self._get_historical_series(df, stat, window, 'mean')
+                    # Limpiar índices duplicados
+                    stat_hist_avg = stat_hist_avg[~stat_hist_avg.index.duplicated(keep='first')]
                     df[f'{stat.lower()}_hist_avg_{window}g'] = stat_hist_avg
                     
                     # Consistencia básica (solo para stats principales)
                     if stat in ['points', 'rebounds', 'assists', 'minutes'] and window == 5:
                         stat_std = self._get_historical_series(df, stat, window, 'std', min_periods=2)
+                        # Limpiar índices duplicados
+                        stat_std = stat_std[~stat_std.index.duplicated(keep='first')]
                         df[f'{stat.lower()}_consistency_{window}g'] = 1 / (stat_std.fillna(1) + 1)
         
         # 1. USAGE RATE HISTÓRICO (SIN DATA LEAKAGE)
@@ -477,6 +492,8 @@ class DoubleDoubleFeatureEngineer:
                 # Consistencia de usage (solo ventana 5)
                 if window == 5:
                     usage_std = self._get_historical_series(df, 'field_goals_att', window, 'std', min_periods=2)
+                    # Eliminar índices duplicados
+                    usage_std = usage_std[~usage_std.index.duplicated(keep='first')]
                     df[f'usage_consistency_{window}g'] = 1 / (usage_std.fillna(1) + 1)
             
 
@@ -601,8 +618,9 @@ class DoubleDoubleFeatureEngineer:
                 # Calcular DD rate vs oponente usando solo datos pasados (shift(1))
                 df_temp = df.copy()
                 df_temp['double_double_shifted'] = df_temp.groupby('player')['double_double'].shift(1)
-                opp_dd_rate = df_temp.groupby(['player', 'Opp'])['double_double_shifted'].mean()
-                df['vs_opp_dd_rate'] = df.set_index(['player', 'Opp']).index.map(opp_dd_rate).fillna(0.1)
+                opp_dd_rate = df_temp.groupby(['player', 'Opp'])['double_double_shifted'].mean().to_dict()
+                # Usar apply con tuplas para evitar problemas de índice
+                df['vs_opp_dd_rate'] = df.apply(lambda row: opp_dd_rate.get((row['player'], row['Opp']), 0.1), axis=1)
             
             # Strong vs weak opponents
             strong_teams = ['BOS', 'MIL', 'PHI', 'CLE', 'NYK', 'DEN', 'MEM', 'SAC', 'PHX', 'LAC']

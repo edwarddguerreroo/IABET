@@ -658,9 +658,7 @@ class HalfTimePointsModel:
             
         Returns:
             DataFrame filtrado con datos de calidad
-        """
-        logger.info("Aplicando filtros de calidad de datos...")
-        
+        """        
         # 1. EQUIPOS PROBLEMÁTICOS YA ELIMINADOS DEL DATASET
         df_filtered = df.copy()
         logger.info("Equipos problemáticos ya eliminados del dataset original")
@@ -687,10 +685,7 @@ class HalfTimePointsModel:
             
             # Mostrar algunos ejemplos de outliers
             outliers_sample = df_filtered[outliers_mask][['Team', 'Date', 'HT']].head(5)
-            logger.info("Ejemplos de outliers eliminados:")
-            for _, row in outliers_sample.iterrows():
-                logger.info(f"  {row['Team']} {row['Date']}: {row['HT']} puntos")
-            
+
             df_filtered = df_filtered[~outliers_mask].copy()
         else:
             logger.info("No se encontraron outliers extremos en puntos")
@@ -739,6 +734,7 @@ class HalfTimePointsModel:
         # FILTRAR EQUIPOS PROBLEMÁTICOS Y OUTLIERS
         logger.info("Aplicando filtros de calidad de datos...")
         df_clean = self._apply_data_quality_filters(df)
+        df_clean = df_clean.reset_index(drop=True)  # Garantizar índices continuos
         logger.info(f"Datos filtrados: {len(df)} → {len(df_clean)} registros ({len(df)-len(df_clean)} eliminados)")
 
         # Generar características
@@ -1064,7 +1060,7 @@ class HalfTimePointsModel:
             raise ValueError("El modelo debe ser entrenado primero")
         
         # APLICAR LOS MISMOS FILTROS DE CALIDAD QUE EN ENTRENAMIENTO
-        logger.info("Aplicando filtros de calidad de datos para predicción...")
+        logger.info("Aplicando filtros de calidad de datos")
         df_clean = self._apply_data_quality_filters(df)
         
         # Limpiar cache para nueva predicción

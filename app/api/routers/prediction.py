@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends
 from logging import Logger
 
-from app.api.dependencies import get_model_service, get_logger
+from app.api.dependencies import get_model_service, get_logger, get_redis
 from app.models.game import Game
 from app.models.prediction import PredictionResponse
 from app.services.model_service import ModelService
+from app.core.redis_config import RedisClient
 
 mock_game = [
         {
@@ -75,64 +76,55 @@ mock_game = [
                 ],
             },
             "awayTeam": {
-                "teamId": "583ed102-fb46-11e1-82cb-f4ce4684ea4c",
-                "name": "Denver Nuggets",
-                "alias": "DEN",
+                "teamId": "583ecb3a-fb46-11e1-82cb-f4ce4684ea4c",
+                "name": "Houston Rockets",
+                "alias": "HOU",
                 "conference": None,
                 "division": None,
                 "score": 0,
                 "record": None,
                 "players": [
                     {
-                        "playerId": "f2625432-3903-4f90-9b0b-2e4f63856bb0",
-                        "fullName": "Nikola Jokić",
-                        "jerseyNumber": 15,
+                        "playerId": "9a331092-35db-456c-a44a-d5b80a02ebe9",
+                        "fullName": "Jalen Green",
+                        "jerseyNumber": 0,
+                        "position": "SG",
+                        "starter": True,
+                        "status": "ACT",
+                        "injuries": [],
+                    },
+                    {
+                        "playerId": "45f17314-918c-49bd-a482-adc171859025",
+                        "fullName": "Fred VanVleet",
+                        "jerseyNumber": 5,
+                        "position": "PG",
+                        "starter": True,
+                        "status": "ACT",
+                        "injuries": [],
+                    },
+                    {
+                        "playerId": "47ff78e7-5607-48d6-9c1a-bddb075dbe70",
+                        "fullName": "Alperen Sengun",
+                        "jerseyNumber": 28,
                         "position": "C",
                         "starter": True,
                         "status": "ACT",
                         "injuries": [],
                     },
                     {
-                        "playerId": "685576ef-ea6c-4ccf-affd-18916baf4e60",
-                        "fullName": "Jamal Murray",
-                        "jerseyNumber": 27,
-                        "position": "PG",
-                        "starter": True,
-                        "status": "ACT",
-                        "injuries": [],
-                    },
-                    {
-                        "playerId": "3a7d6510-00e9-4265-81df-864a1f547269",
-                        "fullName": "Michael Porter Jr.",
+                        "playerId": "293be24b-3a94-40b2-a7a4-a1dd788302e9",
+                        "fullName": "Jabari Smith Jr.",
                         "jerseyNumber": 1,
-                        "position": "SF",
-                        "starter": True,
-                        "status": "ACT",
-                        "injuries": [],
-                    },
-                    {
-                        "playerId": "20f85838-0bd5-4c1f-ab85-a308bafaf5bc",
-                        "fullName": "Aaron Gordon",
-                        "jerseyNumber": 32,
                         "position": "PF",
                         "starter": True,
                         "status": "ACT",
-                        "injuries": [
-                            {
-                                "id": "638efe6b-bb02-4c41-a88c-b6bc09f97155",
-                                "type": "Hamstring",
-                                "location": "Hamstring",
-                                "comment": "The Nuggets announced that Gordon is expected to be listed as Questionable for Sunday's (May. 18) Game 7 against the Thunder, per Tony Jones of The Athletic.",
-                                "startDate": "2025-05-16",
-                                "expectedReturn": None,
-                            },
-                        ],
+                        "injuries": [],
                     },
                     {
-                        "playerId": "74a45eed-f2b0-4886-ae71-d04cf7d59528",
-                        "fullName": "Russell Westbrook",
-                        "jerseyNumber": 4,
-                        "position": "PG",
+                        "playerId": "aeba1657-a0df-427b-ba9a-6db9e9147304",
+                        "fullName": "Cam Whitmore",
+                        "jerseyNumber": 7,
+                        "position": "SF",
                         "starter": False,
                         "status": "ACT",
                         "injuries": [],
@@ -163,6 +155,7 @@ async def prediction(
     game: Game = None,
     svc: ModelService = Depends(get_model_service),
     logger: Logger     = Depends(get_logger),
+    redis: RedisClient = Depends(get_redis),
 ):
     """
     - Usa el mock_game predefinido para generar predicciones.
@@ -176,14 +169,10 @@ async def prediction(
     """
     # Usar el mock_game predefinido
     mock_data = mock_game[0]  # Tomar el primer (y único) juego del mock
-    logger.info(f"🎯 Usando mock_game para predicción")
-    logger.info(f"🔍 Mock Game - homeTeam.name: '{mock_data['homeTeam']['name']}'")
-    logger.info(f"🔍 Mock Game - awayTeam.name: '{mock_data['awayTeam']['name']}'")
     
     # Convertir el mock_game a objeto Game de Pydantic
     from app.models.game import Game
     mock_game_obj = Game(**mock_data)
     
-    prediction = svc.predict(mock_game_obj)
-    logger.info(f"Predicción generada para mock_game: {prediction}")
+    prediction = svc.predict(mock_game_obj, redis)
     return prediction

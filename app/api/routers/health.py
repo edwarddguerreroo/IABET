@@ -8,4 +8,4 @@ router = APIRouter(
 
 @router.get("/", status_code=status.HTTP_200_OK)
 async def health_check():
-    return {"status": "healthy", "message": "API alive 🚀"}
+    return {"status": "healthy", "message": "API alive "}

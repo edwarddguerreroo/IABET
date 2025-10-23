@@ -60,12 +60,12 @@ class TeamsConfidence:
                 teams_quarters_path="app/architectures/basketball/data/teams_quarters.csv",
                 biometrics_path="app/architectures/basketball/data/biometrics.csv"
             )
-            self.historical_players, self.historical_teams = data_loader.load_data()
+            self.historical_players, self.historical_teams, self.historical_players_quarters, self.historical_teams_quarters = data_loader.load_data()
             self.is_loaded = True
-            logger.info("✅ TeamsConfidence: Datos históricos cargados correctamente")
+            logger.info(" TeamsConfidence: Datos históricos cargados correctamente")
             return True
         except Exception as e:
-            logger.error(f"❌ Error cargando datos en TeamsConfidence: {e}")
+            logger.error(f" Error cargando datos en TeamsConfidence: {e}")
             return False
 
     def calculate_teams_points_confidence(self, raw_prediction: float, stabilized_prediction: float, 
@@ -93,7 +93,7 @@ class TeamsConfidence:
             # FACTOR 1: Confianza base por distancia de tolerancia (40% del peso)
             tolerance_confidence = min(100, abs(tolerance) * 8)
             
-            # 🤖 FACTOR PREDICCIÓN (25% peso) - pred:98
+            #  FACTOR PREDICCIÓN (25% peso) - pred:98
             # Consistencia del modelo ML (desviación estándar)
             # Cálculo: max(0, 100 - (prediction_std * 5))
             # Menor desviación = mayor confianza
@@ -111,7 +111,7 @@ class TeamsConfidence:
             else:
                 team_stability = 90
             
-            # 📊 FACTOR DATOS (10% peso) - data:95
+            #  FACTOR DATOS (10% peso) - data:95
             # Cantidad de juegos históricos disponibles
             # 25+ juegos = 95%, 20+ = 90%, 15+ = 80%, etc.
             if historical_games >= 25:
@@ -125,7 +125,7 @@ class TeamsConfidence:
             else:
                 data_confidence = max(50, historical_games * 5)
             
-            # 🔗 FACTOR COHERENCIA (5% peso) - coh:95
+            #  FACTOR COHERENCIA (5% peso) - coh:95
             # Coherencia entre predicción del modelo y histórico
             # Menor diferencia = mayor confianza
             coherence_diff = abs(raw_prediction - stabilized_prediction)
@@ -157,7 +157,7 @@ class TeamsConfidence:
             # APLICAR LÍMITES REALISTAS (65% - 98%)
             final_confidence = max(65.0, min(98.0, weighted_confidence))
             
-            logger.info(f"🎯 Confianza teams_points: {final_confidence:.1f}% "
+            logger.info(f" Confianza teams_points: {final_confidence:.1f}% "
                        f"(tol:{tolerance_confidence:.0f}, pred:{prediction_consistency:.0f}, "
                        f"stab:{team_stability:.0f}, data:{data_confidence:.0f}, "
                        f"coh:{coherence_confidence:.0f}, home:+{home_bonus})")
@@ -165,7 +165,7 @@ class TeamsConfidence:
             return final_confidence
             
         except Exception as e:
-            logger.warning(f"⚠️ Error calculando confianza teams_points: {e}")
+            logger.warning(f" Error calculando confianza teams_points: {e}")
             return 75.0
 
     def calculate_total_points_confidence(self, raw_prediction: float, stabilized_prediction: float, 
@@ -234,7 +234,7 @@ class TeamsConfidence:
             # APLICAR LÍMITES REALISTAS (65% - 98%)
             final_confidence = max(65.0, min(98.0, weighted_confidence))
             
-            logger.info(f"🎯 Confianza total_points: {final_confidence:.1f}% "
+            logger.info(f" Confianza total_points: {final_confidence:.1f}% "
                        f"(tol:{tolerance_confidence:.0f}, pred:{prediction_consistency:.0f}, "
                        f"stab:{game_stability:.0f}, data:{data_confidence:.0f}, "
                        f"coh:{coherence_confidence:.0f}, SIN bonus local)")
@@ -242,7 +242,7 @@ class TeamsConfidence:
             return final_confidence
             
         except Exception as e:
-            logger.warning(f"⚠️ Error calculando confianza total_points: {e}")
+            logger.warning(f" Error calculando confianza total_points: {e}")
             return 75.0
 
     def calculate_is_win_confidence(self, win_probability: float, historical_data: pd.DataFrame, 
@@ -294,14 +294,14 @@ class TeamsConfidence:
             # Asegurar que esté en rango válido
             final_confidence = max(self.min_confidence_threshold, min(95.0, final_confidence))
             
-            logger.info(f"🎯 Confianza is_win: {final_confidence:.1f}% "
+            logger.info(f" Confianza is_win: {final_confidence:.1f}% "
                        f"(base:{base_confidence:.0f}, data:{data_factor:.2f}, "
                        f"consist:{consistency_factor:.2f}, h2h:{head_to_head_factor:.2f}, star:{star_player_factor:.2f}, home:+{home_bonus})")
             
             return round(final_confidence, 1)
             
         except Exception as e:
-            logger.warning(f"⚠️ Error calculando confianza is_win: {e}")
+            logger.warning(f" Error calculando confianza is_win: {e}")
             return 75.0
 
     def calculate_star_player_factor_teams_points(self, team_name: str, opponent_name: str = None, 
@@ -613,20 +613,20 @@ class TeamsConfidence:
                                 
                                 if len(player_team_data) >= 5:  # Mínimo 5 juegos para considerarlo
                                     verified_current_players.append(player_team_data)
-                                    logger.debug(f"✅ {player_name}: Jugador actual de {team_abbrev} "
+                                    logger.debug(f" {player_name}: Jugador actual de {team_abbrev} "
                                                f"(último juego: {days_since_last_game} días atrás)")
                                 else:
-                                    logger.debug(f"⚠️ {player_name}: Pocos datos en {team_abbrev} ({len(player_team_data)} juegos)")
+                                    logger.debug(f" {player_name}: Pocos datos en {team_abbrev} ({len(player_team_data)} juegos)")
                             else:
-                                logger.debug(f"❌ {player_name}: No es jugador actual "
+                                logger.debug(f" {player_name}: No es jugador actual "
                                            f"(equipo: {latest_team}, días: {days_since_last_game})")
                     
                     if verified_current_players:
                         recent_players = pd.concat(verified_current_players, ignore_index=True)
-                        logger.info(f"🎯 {team_name}: {len(verified_current_players)} jugadores actuales verificados")
+                        logger.info(f" {team_name}: {len(verified_current_players)} jugadores actuales verificados")
                     else:
                         # Fallback más conservador si no encuentra jugadores actuales
-                        logger.warning(f"⚠️ No se encontraron jugadores actuales para {team_name}, usando fallback")
+                        logger.warning(f" No se encontraron jugadores actuales para {team_name}, usando fallback")
                         recent_players = team_players.head(lookback_games * 10)
                 else:
                     recent_players = team_players.head(lookback_games * 10)
@@ -860,7 +860,6 @@ class TeamsConfidence:
             home_abbrev = self.common_utils._get_team_abbreviation(home_team)
             away_abbrev = self.common_utils._get_team_abbreviation(away_team)
             
-            logger.info(f"🔍 Buscando H2H: {home_team} ({home_abbrev}) vs {away_team} ({away_abbrev})")
             
             # Buscar enfrentamientos directos en ambas direcciones
             h2h_home_away = self.historical_teams[
@@ -881,7 +880,7 @@ class TeamsConfidence:
             elif len(h2h_away_home) > 0:
                 h2h_combined = h2h_away_home
             else:
-                logger.warning(f"❌ No se encontraron enfrentamientos H2H entre {home_abbrev} y {away_abbrev}")
+                logger.warning(f" No se encontraron enfrentamientos H2H entre {home_abbrev} y {away_abbrev}")
                 return {}
             
             # Ordenar por fecha (más reciente primero)
@@ -891,7 +890,7 @@ class TeamsConfidence:
             # Usar todos los juegos H2H para mejor precisión
             h2h_recent = h2h_combined
             
-            logger.info(f"📊 Encontrados {len(h2h_recent)} enfrentamientos H2H recientes")
+            logger.info(f" Encontrados {len(h2h_recent)} enfrentamientos H2H recientes")
             
             if len(h2h_recent) == 0:
                 return {}
@@ -903,7 +902,7 @@ class TeamsConfidence:
             elif 'points' in h2h_recent.columns:
                 total_points = h2h_recent['points'].values
             else:
-                logger.warning("❌ No se encontró columna 'points' en datos H2H")
+                logger.warning(" No se encontró columna 'points' en datos H2H")
                 return {}
             
             # Calcular estadísticas en diferentes ventanas
@@ -953,7 +952,7 @@ class TeamsConfidence:
             return stats
             
         except Exception as e:
-            logger.error(f"❌ Error calculando estadísticas H2H total_points: {e}")
+            logger.error(f" Error calculando estadísticas H2H total_points: {e}")
             return {}
 
     def calculate_head_to_head_factor(self, home_team: str, away_team: str) -> float:
@@ -1086,7 +1085,7 @@ class TeamsConfidence:
             # FACTOR 1: Confianza base por distancia de tolerancia (40% del peso)
             tolerance_confidence = min(100, abs(tolerance) * 8)
             
-            # 🤖 FACTOR PREDICCIÓN (25% peso) - pred:98
+            #  FACTOR PREDICCIÓN (25% peso) - pred:98
             # Consistencia del modelo ML (desviación estándar)
             # Cálculo: max(0, 100 - (prediction_std * 5))
             # Menor desviación = mayor confianza
@@ -1104,7 +1103,7 @@ class TeamsConfidence:
             else:
                 team_stability = 90
             
-            # 📊 FACTOR DATOS (10% peso) - data:95
+            #  FACTOR DATOS (10% peso) - data:95
             # Cantidad de juegos históricos disponibles
             # 25+ juegos = 95%, 20+ = 90%, 15+ = 80%, etc.
             if historical_games >= 25:
@@ -1118,7 +1117,7 @@ class TeamsConfidence:
             else:
                 data_confidence = max(50, historical_games * 5)
             
-            # 🔗 FACTOR COHERENCIA (5% peso) - coh:95
+            #  FACTOR COHERENCIA (5% peso) - coh:95
             # Coherencia entre predicción del modelo y histórico
             # Menor diferencia = mayor confianza
             coherence_diff = abs(raw_prediction - stabilized_prediction)
@@ -1150,7 +1149,7 @@ class TeamsConfidence:
             # APLICAR LÍMITES REALISTAS (65% - 98%)
             final_confidence = max(65.0, min(98.0, weighted_confidence))
             
-            logger.info(f"🎯 Confianza halftime: {final_confidence:.1f}% "
+            logger.info(f" Confianza halftime: {final_confidence:.1f}% "
                        f"(tol:{tolerance_confidence:.0f}, pred:{prediction_consistency:.0f}, "
                        f"stab:{team_stability:.0f}, data:{data_confidence:.0f}, "
                        f"coh:{coherence_confidence:.0f}, home:+{home_bonus})")
@@ -1158,7 +1157,7 @@ class TeamsConfidence:
             return final_confidence
             
         except Exception as e:
-            logger.warning(f"⚠️ Error calculando confianza halftime: {e}")
+            logger.warning(f" Error calculando confianza halftime: {e}")
             return 75.0
     
     def calculate_h2h_factor_halftime(self, team_name: str, opponent_name: str, historical_teams: pd.DataFrame = None) -> Dict[str, Any]:
@@ -1227,7 +1226,7 @@ class TeamsConfidence:
             }
             
         except Exception as e:
-            logger.warning(f"⚠️ Error calculando H2H halftime: {e}")
+            logger.warning(f" Error calculando H2H halftime: {e}")
             return {'games_found': 0, 'halftime_mean': None, 'h2h_factor': 1.0, 'consistency_score': 0}
     
     def calculate_halftime_total_points_confidence(self, home_confidence: float, away_confidence: float, 
@@ -1290,13 +1289,13 @@ class TeamsConfidence:
             # APLICAR LÍMITES REALISTAS (65% - 98%)
             final_confidence = max(65.0, min(98.0, final_confidence))
             
-            logger.info(f"🎯 Confianza halftime_total_points: {final_confidence:.1f}% "
+            logger.info(f" Confianza halftime_total_points: {final_confidence:.1f}% "
                        f"(avg_base:{avg_base_confidence:.1f}, consist:{consistency_bonus:+.1f}, "
                        f"h2h:{h2h_bonus:+.1f}, star:{star_bonus:+.1f})")
             
             return round(final_confidence, 1)
             
         except Exception as e:
-            logger.warning(f"⚠️ Error calculando confianza halftime_total_points: {e}")
+            logger.warning(f" Error calculando confianza halftime_total_points: {e}")
             return 75.0
     

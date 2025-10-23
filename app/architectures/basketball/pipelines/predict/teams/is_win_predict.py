@@ -86,20 +86,20 @@ class IsWinPredictor:
                 teams_quarters_path="app/architectures/basketball/data/teams_quarters.csv",
                 biometrics_path="app/architectures/basketball/data/biometrics.csv"
             )
-            self.historical_players, self.historical_teams = data_loader.load_data()
+            self.historical_players, self.historical_teams, self.historical_players_quarters, self.historical_teams_quarters = data_loader.load_data()
             
             # Inicializar confidence_calculator con datos históricos
             self.confidence_calculator = TeamsConfidence()
             self.confidence_calculator.historical_teams = self.historical_teams
             self.confidence_calculator.historical_players = self.historical_players
-            logger.info("✅ Confidence calculator inicializado con datos históricos")
+            logger.info(" Confidence calculator inicializado con datos históricos")
             
             # Cargar predictor de team points (nueva lógica)
-            logger.info("🏀 Cargando predictor de team points...")
+            logger.info(" Cargando predictor de team points...")
             if not self.teams_points_predictor.load_data_and_model():
-                logger.error("❌ Error cargando predictor de team points")
+                logger.error(" Error cargando predictor de team points")
                 return False
-            logger.info("✅ Predictor de team points cargado exitosamente")
+            logger.info(" Predictor de team points cargado exitosamente")
             
             # Ya no necesitamos el modelo is_win directamente
             # pero mantenemos la compatibilidad
@@ -110,7 +110,7 @@ class IsWinPredictor:
             return True
             
         except Exception as e:
-            logger.error(f"❌ Error cargando datos y modelo: {e}")
+            logger.error(f" Error cargando datos y modelo: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -150,11 +150,20 @@ class IsWinPredictor:
             if 'error' in prediction_result:
                 return prediction_result
             
-            # 4. Extraer información de la predicción
+            # 4. Extraer información de la predicción (sin fallbacks)
             predicted_winner = prediction_result['bet_line']
             predicted_winner_name = prediction_result['target_name']
             confidence_value = prediction_result['confidence_percentage']
-            prediction_details = prediction_result.get('prediction_details', {})
+            
+            # prediction_details puede ser vacío, pero debe existir como dict
+            prediction_details = prediction_result.get('prediction_details')
+            if prediction_details is None:
+                prediction_details = {}
+            
+            # prediction_type puede usar un default seguro (es metadata, no dato crítico)
+            prediction_type = prediction_result.get('prediction_type')
+            if prediction_type is None:
+                prediction_type = 'is_win'
             
             return {
                 "home_team": home_team,
@@ -163,13 +172,13 @@ class IsWinPredictor:
                 "target_name": predicted_winner_name,
                 "bet_line": predicted_winner,
                 "bet_type": "winner",
-                "prediction_type": prediction_result.get('prediction_type', 'is_win'),
+                "prediction_type": prediction_type,
                 "confidence_percentage": confidence_value,
                 "prediction_details": prediction_details
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en predicción desde SportRadar: {e}")
+            logger.error(f" Error en predicción desde SportRadar: {e}")
             return {'error': f'Error procesando datos de SportRadar: {str(e)}'}
     
     def predict_match_winner(self, game_data: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -198,10 +207,10 @@ class IsWinPredictor:
             home_team = self.common_utils._get_team_abbreviation(home_team_name)
             away_team = self.common_utils._get_team_abbreviation(away_team_name)
             
-            logger.info(f"🏀 Prediciendo ganador usando team points: {home_team_name} ({home_team}) vs {away_team_name} ({away_team})")
+            logger.info(f" Prediciendo ganador usando team points: {home_team_name} ({home_team}) vs {away_team_name} ({away_team})")
             
             # NUEVA LÓGICA: Usar predictor de team points para ambos equipos
-            logger.info("📊 Obteniendo predicciones de puntos para ambos equipos...")
+            logger.info(" Obteniendo predicciones de puntos para ambos equipos...")
             
             # Predecir puntos del equipo local
             home_prediction = self.teams_points_predictor.predict_game(game_data, home_team_name)
@@ -215,16 +224,30 @@ class IsWinPredictor:
                 logger.error(f"Error prediciendo puntos de {away_team_name}: {away_prediction['error']}")
                 return {'error': f"Error prediciendo puntos de {away_team_name}"}
             
-            # Extraer puntos predichos
-            home_points = float(home_prediction.get('bet_line', 0))
-            away_points = float(away_prediction.get('bet_line', 0))
+            # Extraer puntos predichos (sin fallbacks - debe existir)
+            if 'bet_line' not in home_prediction:
+                logger.error(f"❌ Predicción de {home_team_name} no contiene 'bet_line'")
+                return {'error': f"Predicción de {home_team_name} sin 'bet_line'"}
+            if 'bet_line' not in away_prediction:
+                logger.error(f"❌ Predicción de {away_team_name} no contiene 'bet_line'")
+                return {'error': f"Predicción de {away_team_name} sin 'bet_line'"}
             
-            # Extraer confianzas
-            home_confidence = float(home_prediction.get('confidence_percentage', 0))
-            away_confidence = float(away_prediction.get('confidence_percentage', 0))
+            home_points = float(home_prediction['bet_line'])
+            away_points = float(away_prediction['bet_line'])
+            
+            # Extraer confianzas (sin fallbacks - debe existir)
+            if 'confidence_percentage' not in home_prediction:
+                logger.error(f"❌ Predicción de {home_team_name} no contiene 'confidence_percentage'")
+                return {'error': f"Predicción de {home_team_name} sin 'confidence_percentage'"}
+            if 'confidence_percentage' not in away_prediction:
+                logger.error(f"❌ Predicción de {away_team_name} no contiene 'confidence_percentage'")
+                return {'error': f"Predicción de {away_team_name} sin 'confidence_percentage'"}
+            
+            home_confidence = float(home_prediction['confidence_percentage'])
+            away_confidence = float(away_prediction['confidence_percentage'])
             
             logger.info(f"📈 Puntos predichos - {home_team_name}: {home_points}, {away_team_name}: {away_points}")
-            logger.info(f"🎯 Confianzas - {home_team_name}: {home_confidence}%, {away_team_name}: {away_confidence}%")
+            logger.info(f" Confianzas - {home_team_name}: {home_confidence}%, {away_team_name}: {away_confidence}%")
             
             # Determinar ganador basándose en puntos predichos
             if home_points > away_points:
@@ -271,12 +294,12 @@ class IsWinPredictor:
                 win_probability = max(win_probability - 0.05, 0.55)  # Reducir menos el ajuste
             
             # SIEMPRE emitir predicción - el equipo con más puntos predichos es el ganador
-            logger.info(f"🎯 Probabilidad de victoria: {win_probability:.1%} - Emitiendo predicción")
+            logger.info(f" Probabilidad de victoria: {win_probability:.1%} - Emitiendo predicción")
             
             # Calcular confianza final (promedio ponderado)
             final_confidence = (winner_confidence + (win_probability * 100)) / 2
             
-            logger.info(f"🎯 Predicción final: {predicted_winner_name} gana con {final_confidence:.1f}% confianza")
+            logger.info(f" Predicción final: {predicted_winner_name} gana con {final_confidence:.1f}% confianza")
                 
             # CALCULAR ESTADÍSTICAS DETALLADAS DE VICTORIAS PARA PREDICTION_DETAILS
             # Estadísticas de victorias del equipo local
@@ -287,6 +310,13 @@ class IsWinPredictor:
             home_total_games = len(home_team_historical)
             home_win_rate = (home_total_wins / home_total_games) * 100 if home_total_games > 0 else 0
             
+            # Estadísticas estructuradas para últimos 5 y 10 juegos (HOME)
+            home_last_5 = home_team_historical.tail(5) if len(home_team_historical) >= 5 else home_team_historical
+            home_last_10 = home_team_historical.tail(10) if len(home_team_historical) >= 10 else home_team_historical
+            
+            home_last_5_win_rate = (home_last_5['is_win'].sum() / len(home_last_5)) * 100 if len(home_last_5) > 0 else 0
+            home_last_10_win_rate = (home_last_10['is_win'].sum() / len(home_last_10)) * 100 if len(home_last_10) > 0 else 0
+            
             # Estadísticas de victorias del equipo visitante
             away_team_historical = self.common_utils._smart_team_search(self.historical_teams, away_team)
             away_wins_last_5 = away_team_historical.tail(5)['is_win'].sum() if len(away_team_historical) >= 5 else away_team_historical['is_win'].sum()
@@ -294,6 +324,13 @@ class IsWinPredictor:
             away_total_wins = away_team_historical['is_win'].sum()
             away_total_games = len(away_team_historical)
             away_win_rate = (away_total_wins / away_total_games) * 100 if away_total_games > 0 else 0
+            
+            # Estadísticas estructuradas para últimos 5 y 10 juegos (AWAY)
+            away_last_5 = away_team_historical.tail(5) if len(away_team_historical) >= 5 else away_team_historical
+            away_last_10 = away_team_historical.tail(10) if len(away_team_historical) >= 10 else away_team_historical
+            
+            away_last_5_win_rate = (away_last_5['is_win'].sum() / len(away_last_5)) * 100 if len(away_last_5) > 0 else 0
+            away_last_10_win_rate = (away_last_10['is_win'].sum() / len(away_last_10)) * 100 if len(away_last_10) > 0 else 0
             
             # Estadísticas H2H (enfrentamientos directos) usando abreviaciones
             h2h_games = self.historical_teams[
@@ -327,7 +364,19 @@ class IsWinPredictor:
                         "wins_last_5": home_wins_last_5,
                         "wins_last_10": home_wins_last_10,
                         "win_rate_last_5": round((home_wins_last_5 / 5) * 100, 1) if home_wins_last_5 >= 0 else 0,
-                        "win_rate_last_10": round((home_wins_last_10 / 10) * 100, 1) if home_wins_last_10 >= 0 else 0
+                        "win_rate_last_10": round((home_wins_last_10 / 10) * 100, 1) if home_wins_last_10 >= 0 else 0,
+                        "last_5_games": {
+                            "count": len(home_last_5),
+                            "win_rate": round(home_last_5_win_rate, 1),
+                            "wins": int(home_last_5['is_win'].sum()),
+                            "losses": int(len(home_last_5) - home_last_5['is_win'].sum())
+                        },
+                        "last_10_games": {
+                            "count": len(home_last_10),
+                            "win_rate": round(home_last_10_win_rate, 1),
+                            "wins": int(home_last_10['is_win'].sum()),
+                            "losses": int(len(home_last_10) - home_last_10['is_win'].sum())
+                        }
                     },
                     "away_team_stats": {
                         "total_games": away_total_games,
@@ -336,7 +385,19 @@ class IsWinPredictor:
                         "wins_last_5": away_wins_last_5,
                         "wins_last_10": away_wins_last_10,
                         "win_rate_last_5": round((away_wins_last_5 / 5) * 100, 1) if away_wins_last_5 >= 0 else 0,
-                        "win_rate_last_10": round((away_wins_last_10 / 10) * 100, 1) if away_wins_last_10 >= 0 else 0
+                        "win_rate_last_10": round((away_wins_last_10 / 10) * 100, 1) if away_wins_last_10 >= 0 else 0,
+                        "last_5_games": {
+                            "count": len(away_last_5),
+                            "win_rate": round(away_last_5_win_rate, 1),
+                            "wins": int(away_last_5['is_win'].sum()),
+                            "losses": int(len(away_last_5) - away_last_5['is_win'].sum())
+                        },
+                        "last_10_games": {
+                            "count": len(away_last_10),
+                            "win_rate": round(away_last_10_win_rate, 1),
+                            "wins": int(away_last_10['is_win'].sum()),
+                            "losses": int(len(away_last_10) - away_last_10['is_win'].sum())
+                        }
                     },
                     "h2h_stats": {
                         "games_found": h2h_games_count,
@@ -349,7 +410,7 @@ class IsWinPredictor:
             }
                 
         except Exception as e:
-                logger.error(f"❌ Error en predicción: {e}")
+                logger.error(f" Error en predicción: {e}")
                 import traceback
                 traceback.print_exc()
                 return {
@@ -361,96 +422,136 @@ class IsWinPredictor:
     
 def test_is_win_predictor():
     """Función de prueba rápida del predictor de is_win (nueva lógica basada en team points)"""
-    print("🧪 PROBANDO IS_WIN PREDICTOR (NUEVA LÓGICA - TEAM POINTS)")
-    print("="*60)
+    print("="*80)
+    print(" PROBANDO IS_WIN PREDICTOR - KNICKS VS CAVALIERS")
+    print("="*80)
     
     # Inicializar predictor
     predictor = IsWinPredictor()
     
     # Cargar datos y modelo
-    print("📂 Cargando datos y modelo...")
+    print("\n Cargando datos y modelo...")
     if not predictor.load_data_and_model():
-        print("❌ Error cargando modelo")
+        print(" Error cargando modelo")
         return False
     
-    # Prueba con datos simulados de SportRadar
-    print("\n🎯 Prueba con datos simulados de SportRadar:")
+    print("\n[OK] Modelo cargado exitosamente")
     
-    # Simular datos de SportRadar para New York Knicks vs Denver Nuggets
+    # Prueba con datos simulados de SportRadar
+    print("\n" + "="*80)
+    print(" PRUEBA: KNICKS VS CAVALIERS - PREDICCION DE GANADOR")
+    print("="*80)
+    
+    # Simular datos de SportRadar para Knicks vs Cavaliers
     mock_sportradar_game = {
-        "gameId": "sr:match:is_win_test",
-        "scheduled": "2024-01-25T19:30:00Z",
+        "gameId": "sr:match:knicks_cavs_20250124",
+        "scheduled": "2025-01-24T19:30:00Z",
         "status": "scheduled",
         "homeTeam": {
             "name": "New York Knicks",
             "alias": "NYK",
             "players": [
-                {
-                    "playerId": "sr:player:brunson",
-                    "fullName": "Jalen Brunson",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "11",
-                    "injuries": []
-                }
+                {"playerId": "sr:player:brunson", "fullName": "Jalen Brunson", "position": "PG", "starter": True, "status": "ACT", "jerseyNumber": "11", "injuries": []},
+                {"playerId": "sr:player:towns", "fullName": "Karl-Anthony Towns", "position": "C", "starter": True, "status": "ACT", "jerseyNumber": "32", "injuries": []},
+                {"playerId": "sr:player:anunoby", "fullName": "OG Anunoby", "position": "SF", "starter": True, "status": "ACT", "jerseyNumber": "8", "injuries": []},
+                {"playerId": "sr:player:hart", "fullName": "Josh Hart", "position": "SG", "starter": True, "status": "ACT", "jerseyNumber": "3", "injuries": []},
+                {"playerId": "sr:player:robinson", "fullName": "Mitchell Robinson", "position": "C", "starter": True, "status": "ACT", "jerseyNumber": "23", "injuries": []}
             ]
         },
         "awayTeam": {
-            "name": "Denver Nuggets", 
-            "alias": "DEN",
+            "name": "Cleveland Cavaliers", 
+            "alias": "CLE",
             "players": [
-                {
-                    "playerId": "sr:player:jokic",
-                    "fullName": "Nikola Jokic",
-                    "position": "C",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "15",
-                    "injuries": []
-                }
+                {"playerId": "sr:player:mitchell", "fullName": "Donovan Mitchell", "position": "SG", "starter": True, "status": "ACT", "jerseyNumber": "45", "injuries": []},
+                {"playerId": "sr:player:garland", "fullName": "Darius Garland", "position": "PG", "starter": True, "status": "ACT", "jerseyNumber": "10", "injuries": []},
+                {"playerId": "sr:player:mobley", "fullName": "Evan Mobley", "position": "PF", "starter": True, "status": "ACT", "jerseyNumber": "4", "injuries": []},
+                {"playerId": "sr:player:allen", "fullName": "Jarrett Allen", "position": "C", "starter": True, "status": "ACT", "jerseyNumber": "31", "injuries": []},
+                {"playerId": "sr:player:strus", "fullName": "Max Strus", "position": "SF", "starter": True, "status": "ACT", "jerseyNumber": "1", "injuries": []}
             ]
         },
         "venue": {
             "name": "Madison Square Garden",
-            "capacity": 20789
+            "capacity": 19812
         }
     }
     
     # Probar predicción desde SportRadar
-    print("   Prediciendo ganador New York Knicks vs Denver Nuggets:")
-    print("   (Usando nueva lógica: comparación de puntos predichos)")
+    print("\nPrediciendo ganador del partido:")
+    print("-" * 60)
+    print("Metodo: Comparacion de puntos predichos por equipo")
     sportradar_result = predictor.predict_game(mock_sportradar_game)
     
+    import json
+    
     if sportradar_result is not None and 'error' not in sportradar_result:
-        print("   ✅ Resultado SportRadar (bet_line = equipo ganador predicho):")
-        for key, value in sportradar_result.items():
-            if key == 'confidence_percentage':
-                print(f"      {key}: {value}% 🎯")
-            elif key == 'prediction_type':
-                print(f"      {key}: {value} (nueva lógica)")
-            else:
-                print(f"      {key}: {value}")
+        print(f"\n[OK] PREDICCION EXITOSA")
+        
+        # Información principal
+        predicted_winner = sportradar_result['target_name']
+        confidence = sportradar_result['confidence_percentage']
+        
+        print(f"\nGANADOR PREDICHO: {predicted_winner}")
+        print(f"Confidence: {confidence}%")
+        print(f"Bet Type: {sportradar_result['bet_type']}")
+        
+        # Detalles de la predicción
+        if 'prediction_details' in sportradar_result:
+            details = sportradar_result['prediction_details']
+            
+            print(f"\nDETALLES DE LA PREDICCION:")
+            print(f"  Puntos predichos local: {details.get('home_points_predicted', 'N/A')}")
+            print(f"  Puntos predichos visitante: {details.get('away_points_predicted', 'N/A')}")
+            print(f"  Diferencia de puntos: {details.get('point_difference', 'N/A')}")
+            print(f"  Probabilidad de victoria: {details.get('win_probability', 'N/A'):.1%}")
+            
+            # Estadísticas de equipos
+            if 'home_team_stats' in details:
+                home_stats = details['home_team_stats']
+                print(f"\nESTADISTICAS EQUIPO LOCAL ({sportradar_result['home_team']}):")
+                print(f"  Win Rate Total: {home_stats.get('win_rate', 'N/A')}% ({home_stats.get('total_wins', 'N/A')}/{home_stats.get('total_games', 'N/A')} juegos)")
+                print(f"  Ultimos 5 juegos: {home_stats.get('wins_last_5', 'N/A')}/5 victorias ({home_stats.get('win_rate_last_5', 'N/A')}%)")
+                print(f"  Ultimos 10 juegos: {home_stats.get('wins_last_10', 'N/A')}/10 victorias ({home_stats.get('win_rate_last_10', 'N/A')}%)")
+            
+            if 'away_team_stats' in details:
+                away_stats = details['away_team_stats']
+                print(f"\nESTADISTICAS EQUIPO VISITANTE ({sportradar_result['away_team']}):")
+                print(f"  Win Rate Total: {away_stats.get('win_rate', 'N/A')}% ({away_stats.get('total_wins', 'N/A')}/{away_stats.get('total_games', 'N/A')} juegos)")
+                print(f"  Ultimos 5 juegos: {away_stats.get('wins_last_5', 'N/A')}/5 victorias ({away_stats.get('win_rate_last_5', 'N/A')}%)")
+                print(f"  Ultimos 10 juegos: {away_stats.get('wins_last_10', 'N/A')}/10 victorias ({away_stats.get('win_rate_last_10', 'N/A')}%)")
+            
+            # H2H
+            if 'h2h_stats' in details:
+                h2h = details['h2h_stats']
+                print(f"\nESTADISTICAS H2H:")
+                print(f"  Juegos encontrados: {h2h.get('games_found', 'N/A')}")
+                print(f"  Victorias local: {h2h.get('home_h2h_wins', 'N/A')} ({h2h.get('home_h2h_win_rate', 'N/A')}%)")
+                print(f"  Victorias visitante: {h2h.get('away_h2h_wins', 'N/A')} ({h2h.get('away_h2h_win_rate', 'N/A')}%)")
+        
+        print(f"\nJSON COMPLETO:")
+        # Convertir numpy types a Python types para JSON serialization
+        def convert_numpy(obj):
+            if isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return obj
+        
+        print(json.dumps(sportradar_result, indent=2, ensure_ascii=False, default=convert_numpy))
+        
     elif sportradar_result is None:
-        print("   ⚠️ No se emitió predicción (probabilidad < 60%)")
+        print("\n[INFO] No se emitio prediccion (probabilidad muy baja)")
     else:
-        print(f"   ❌ Error: {sportradar_result['error']}")
-        if 'available_teams' in sportradar_result:
-            print(f"   Equipos disponibles: {sportradar_result['available_teams']}")
+        print(f"\n[ERROR] Error en prediccion")
+        if 'error' in sportradar_result:
+            print(f"Error: {sportradar_result['error']}")
+        else:
+            print(f"Resultado inesperado: {sportradar_result}")
     
-    # Mostrar detalles de la predicción
-    if sportradar_result is not None and 'prediction_details' in sportradar_result:
-        details = sportradar_result['prediction_details']
-        print(f"\n📊 Detalles de la predicción (Nueva Lógica):")
-        print(f"   🏠 Puntos predichos local: {details.get('home_points_predicted', 'N/A')}")
-        print(f"   ✈️ Puntos predichos visitante: {details.get('away_points_predicted', 'N/A')}")
-        print(f"   📈 Diferencia de puntos: {details.get('point_difference', 'N/A')}")
-        print(f"   🎯 Confianza local: {details.get('home_confidence', 'N/A')}%")
-        print(f"   🎯 Confianza visitante: {details.get('away_confidence', 'N/A')}%")
-        print(f"   📊 Probabilidad de victoria: {details.get('win_probability', 'N/A'):.1%}")
-        print(f"   🔧 Método: {details.get('method', 'N/A')}")
-    
-    print("\n✅ Prueba completada")
+    print("\n" + "="*80)
+    print(" PRUEBA COMPLETADA")
+    print("="*80)
     return True
 
 

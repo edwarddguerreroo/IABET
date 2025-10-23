@@ -59,42 +59,53 @@ class TeamPointsFeatureEngineer:
     
     def _get_historical_series(self, df: pd.DataFrame, column: str, window: int, operation: str = 'mean') -> pd.Series:
         """
-        Cálculo rolling optimizado con cache para evitar duplicados
+        Cálculo rolling optimizado con validación robusta de índices
         SIEMPRE usa shift(1) para prevenir data leakage (futuros juegos)
         """
-        # Crear cache key que incluya el tamaño del DataFrame para evitar conflictos
-        cache_key = f"{column}_{window}_{operation}_{len(df)}"
-        
-        if cache_key in self._rolling_cache:
-            cached_result = self._rolling_cache[cache_key]
-            # Verificar que el índice coincida con el DataFrame actual
-            if len(cached_result) == len(df):
-                return cached_result
-            else:
-                # Cache obsoleto, eliminarlo
-                del self._rolling_cache[cache_key]
-        
+        # Validar entrada
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError("df debe ser un DataFrame")
         if column not in df.columns:
-            result = pd.Series(0, index=df.index)
-        else:
+            logger.warning(f" Columna '{column}' no encontrada, retornando ceros")
+            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+        
+        # Validar que df esté ordenado cronológicamente
+        if 'Date' in df.columns and not df['Date'].is_monotonic_increasing:
+            df = df.sort_values(['Team', 'Date']).reset_index(drop=True)
+        
+        # Calcular rolling con validación de índices
+        try:
             if operation == 'mean':
-                    result = df.groupby('Team')[column].rolling(window=window, min_periods=1).mean().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('Team')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
             elif operation == 'std':
-                    result = df.groupby('Team')[column].rolling(window=window, min_periods=2).std().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('Team')[column].rolling(window=window, min_periods=2).std().shift(1).fillna(0)
             elif operation == 'max':
-                    result = df.groupby('Team')[column].rolling(window=window, min_periods=1).max().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('Team')[column].rolling(window=window, min_periods=1).max().shift(1).fillna(0)
             elif operation == 'sum':
-                    result = df.groupby('Team')[column].rolling(window=window, min_periods=1).sum().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('Team')[column].rolling(window=window, min_periods=1).sum().shift(1).fillna(0)
             else:
-                    result = df.groupby('Team')[column].rolling(window=window, min_periods=1).mean().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('Team')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
             
-            # Asegurar que el resultado tenga el mismo índice que df
+            # Validar que result tenga MultiIndex
+            if isinstance(result.index, pd.MultiIndex):
+                # Reset del MultiIndex a índice simple
+                result = result.reset_index(level=0, drop=True)
+            
+            # Validar alineación de índices antes de reindex
+            if not result.index.equals(df.index):
+                logger.debug(f"Reindexando {column}_{window}_{operation} para alinear índices")
+                result = result.reindex(df.index, fill_value=0)
+            
+            # Validar resultado final
             if len(result) != len(df):
-                result = pd.Series(result.values, index=df.index)
+                logger.error(f" Error: Longitud de resultado ({len(result)}) != DataFrame ({len(df)})")
+                return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
             
-            self._rolling_cache[cache_key] = result
             return result
-    
+            
+        except Exception as e:
+            logger.error(f" Error calculando {column}_{window}_{operation}: {e}")
+            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
     def _safe_divide(self, numerator, denominator, default=0.0):
         """División segura optimizada"""
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -165,9 +176,9 @@ class TeamPointsFeatureEngineer:
             # === COLUMNAS BASE DEL DATASET ORIGINAL ===
             'Team', 'Date', 'Away', 'Opp', 'Result', 'MP',
             'FG', 'FGA', 'FG%', '2P', '2PA', '2P%', '3P', '3PA', '3P%', 
-            'FT', 'FTA', 'FT%', 'PTS',
+            'FT', 'FTA', 'FT%', 'points',
             'FG_Opp', 'FGA_Opp', 'FG%_Opp', '2P_Opp', '2PA_Opp', '2P%_Opp',
-            '3P_Opp', '3PA_Opp', '3P%_Opp', 'FT_Opp', 'FTA_Opp', 'FT%_Opp', 'PTS_Opp',
+            '3P_Opp', '3PA_Opp', '3P%_Opp', 'FT_Opp', 'FTA_Opp', 'FT%_Opp', 'points_Opp',
             
             # === COLUMNAS CRUDAS NUEVOS DATASETS (DATA LEAKAGE - EXCLUIR) ===
             'team_id', 'market', 'name', 'game_id', 'minutes',
@@ -249,7 +260,8 @@ class TeamPointsFeatureEngineer:
         
         # 2. PUNTOS EMA 5 JUEGOS (9.48%)
         if 'points' in df.columns:
-            pts_ema = df.groupby('Team')['points'].ewm(span=5, adjust=False).mean().shift(1).reset_index(0, drop=True)
+            pts_ema = df.groupby('Team')['points'].ewm(span=5, adjust=False).mean().shift(1)
+            pts_ema = pts_ema.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             df['pts_ema_5g'] = pts_ema.fillna(df['points'].mean())
         else:
             df['pts_ema_5g'] = 113.0

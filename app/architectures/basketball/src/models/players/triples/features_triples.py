@@ -14,7 +14,6 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Tuple
 import logging
-from app.architectures.basketball.config.logging_config import NBALogger
 from datetime import datetime, timedelta
 import warnings
 from sklearn.preprocessing import StandardScaler
@@ -35,7 +34,7 @@ class ThreePointsFeatureEngineer:
         self.max_features = max_features
         self.teams_df = teams_df  
         self.players_df = players_df
-        self.players_quarters_df = players_quarters_df  # Nuevo dataset de cuartos  
+        self.players_quarters_df = players_quarters_df  # Dataset de cuartos desde NBA Data Loader  
         
         # VENTANAS ESPACIADAS para reducir correlación
         self.windows = {
@@ -67,41 +66,56 @@ class ThreePointsFeatureEngineer:
             return True
         return False
 
-    def _safe_divide(self, numerator, denominator, default=0.0):
-        """División segura optimizada"""
-        with np.errstate(divide='ignore', invalid='ignore'):
-            result = np.divide(numerator, denominator)
-            result = np.where(denominator == 0, default, result)
-            result = np.nan_to_num(result, nan=default, posinf=default, neginf=default)
-        return result
-
     def _get_historical_series(self, df: pd.DataFrame, column: str, window: int, operation: str = 'mean') -> pd.Series:
         """
-        Cálculo rolling optimizado con cache para evitar duplicados
+        Cálculo rolling optimizado con validación robusta de índices
         SIEMPRE usa shift(1) para prevenir data leakage (futuros juegos)
         """
-        cache_key = f"{column}_{window}_{operation}"
-        
-        if cache_key in self._rolling_cache:
-            return self._rolling_cache[cache_key]
-        
+        # Validar entrada
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError("df debe ser un DataFrame")
         if column not in df.columns:
-            result = pd.Series(0, index=df.index)
-        else:
-            if operation == 'mean':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().reset_index(0, drop=True).fillna(0)
-            elif operation == 'std':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=2).std().reset_index(0, drop=True).fillna(0)
-            elif operation == 'max':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).max().reset_index(0, drop=True).fillna(0)
-            elif operation == 'sum':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).sum().reset_index(0, drop=True).fillna(0)
-            else:
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().reset_index(0, drop=True).fillna(0)
+            logger.warning(f" Columna '{column}' no encontrada, retornando ceros")
+            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
         
-        self._rolling_cache[cache_key] = result
-        return result
-
+        # Validar que df esté ordenado cronológicamente
+        if 'Date' in df.columns and not df['Date'].is_monotonic_increasing:
+            df = df.sort_values(['player', 'Date']).reset_index(drop=True)
+        
+        # Calcular rolling con validación de índices
+        try:
+            if operation == 'mean':
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
+            elif operation == 'std':
+                result = df.groupby('player')[column].rolling(window=window, min_periods=2).std().shift(1).fillna(0)
+            elif operation == 'max':
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).max().shift(1).fillna(0)
+            elif operation == 'sum':
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).sum().shift(1).fillna(0)
+            else:
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
+            
+            # Validar que result tenga MultiIndex
+            if isinstance(result.index, pd.MultiIndex):
+                # Reset del MultiIndex a índice simple
+                result = result.reset_index(level=0, drop=True)
+            
+            # Validar alineación de índices antes de reindex
+            if not result.index.equals(df.index):
+                logger.debug(f"Reindexando {column}_{window}_{operation} para alinear índices")
+                result = result.reindex(df.index, fill_value=0)
+            
+            # Validar resultado final
+            if len(result) != len(df):
+                logger.error(f" Error: Longitud de resultado ({len(result)}) != DataFrame ({len(df)})")
+                return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f" Error calculando {column}_{window}_{operation}: {e}")
+            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+            
     def _convert_mp_to_numeric(self, df: pd.DataFrame) -> None:
         """Convierte columna minutes (minutos jugados) de formato MM:SS a decimal"""
         if 'minutes' in df.columns and df['minutes'].dtype == 'object':
@@ -204,7 +218,7 @@ class ThreePointsFeatureEngineer:
         
         missing_from_df = [f for f in created_features if f not in df.columns]
         if missing_from_df:
-            logger.warning(f"⚠️ Features registradas pero no en DataFrame: {missing_from_df}")
+            logger.warning(f" Features registradas pero no en DataFrame: {missing_from_df}")
         
         # USAR SOLO LAS FEATURES REGISTRADAS Y DISPONIBLES
         
@@ -279,7 +293,8 @@ class ThreePointsFeatureEngineer:
         # 3. THREEPT_ATTEMPTS_SEASON (Rank 3 - 6.36%)
         if 'three_points_att' in df.columns:
             if self._register_feature('threept_attempts_season', 'top_features'):
-                attempts_season = df.groupby('player')['three_points_att'].expanding().mean().shift(1).reset_index(0, drop=True)
+                attempts_season = df.groupby('player')['three_points_att'].expanding().mean().shift(1)
+                attempts_season = attempts_season.reset_index(level=0, drop=True).reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
                 df['threept_attempts_season'] = attempts_season.fillna(df['three_points_att'].mean())
         
         # 4. FLOW_STATE_INDICATOR (Rank 4 - 5.72%)
@@ -397,6 +412,8 @@ class ThreePointsFeatureEngineer:
                     recent_3p = self._get_historical_series(df, 'three_points_made', window=3, operation='mean')
                 
                 player_avg_3p = df.groupby('player')['three_points_made'].transform('mean')
+                # Asegurar que ambos Series tengan el mismo índice
+                recent_3p, player_avg_3p = recent_3p.align(player_avg_3p, join='inner', fill_value=0)
                 hot_streak = recent_3p > (player_avg_3p * 1.2)
                 elite_tier = player_avg_3p >= 2.5
                 elite_hot_streak = hot_streak & elite_tier
@@ -556,8 +573,10 @@ class ThreePointsFeatureEngineer:
             # Explosiveness Factor - Detecta capacidad de juegos excepcionales
             threep_max_7 = self._get_historical_series(df, 'three_points_made', window=7, operation='max')
             # Calcular percentil 90 usando rolling directamente
-            threep_p90_7 = df.groupby('player')['three_points_made'].rolling(7, min_periods=3).quantile(0.9).shift(1).reset_index(0, drop=True)
+            threep_p90_7 = df.groupby('player')['three_points_made'].rolling(7, min_periods=3).quantile(0.9).shift(1)
+            threep_p90_7 = threep_p90_7.reset_index(level=0, drop=True).reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             df['explosiveness_factor'] = ((threep_max_7 - threep_p90_7) / (threep_long + 1e-6)).clip(0, 2.0).fillna(0)
+            df['explosiveness_factor'] = df['explosiveness_factor'].reset_index(level=0, drop=True).reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             self._register_feature('explosiveness_factor', 'elite_performance')
             
             # Elite Pressure Response - Rendimiento en situaciones críticas
@@ -565,12 +584,14 @@ class ThreePointsFeatureEngineer:
             threep_min_7 = self._get_historical_series(df, 'three_points_made', window=7, operation='min')
             threep_range_7 = threep_max_7 - threep_min_7
             df['elite_pressure_response'] = (threep_long / (threep_range_7 + 1e-6)).clip(0, 3.0).fillna(1.0)
+            df['elite_pressure_response'] = df['elite_pressure_response'].reset_index(level=0, drop=True).reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             self._register_feature('elite_pressure_response', 'elite_performance')
             
             # Dynamic Scoring Ceiling - Se adapta al rango de scoring del jugador
             scoring_tier = (threep_long // 5).clip(0, 8)  # Tiers: 0-5, 5-10, ..., 35-40
             tier_multiplier = 1.0 + scoring_tier * 0.1  # Aumenta con tier más alto
             df['dynamic_scoring_ceiling'] = (threep_max_recent - threep_long) * tier_multiplier
+            df['dynamic_scoring_ceiling'] = df['dynamic_scoring_ceiling'].reset_index(level=0, drop=True).reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             self._register_feature('dynamic_scoring_ceiling', 'elite_performance')
             
             # Enhanced weighted average con ajuste por forma reciente
@@ -624,12 +645,22 @@ class ThreePointsFeatureEngineer:
             threep_avg = self._get_historical_series(df, 'three_points_made', self.windows['medium'], 'mean')
             
             # Eficiencia por minuto con boost por high minutes
-            base_efficiency = self._safe_divide(threep_avg, mp_avg + 1)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                base_efficiency = threep_avg / (mp_avg + 1)
+                base_efficiency = base_efficiency.fillna(0).replace([np.inf, -np.inf], 0)
             minutes_multiplier = np.where(mp_avg >= 32, 1.25,      # Elite starters
                                 np.where(mp_avg >= 28, 1.15,       # Strong starters  
                                 np.where(mp_avg >= 20, 1.0,        # Normal
                                 np.where(mp_avg >= 15, 0.85, 0.6)))) # Bench players
             
+            # Convertir minutes_multiplier a Series con el mismo índice
+            if not isinstance(minutes_multiplier, pd.Series):
+                minutes_multiplier = pd.Series(minutes_multiplier, index=base_efficiency.index)
+            
+            # Multiplicación simple - convertir minutes_multiplier a Series si es necesario
+            if not isinstance(minutes_multiplier, pd.Series):
+                minutes_multiplier = pd.Series(minutes_multiplier, index=df.index)
             df['mp_efficiency_core'] = base_efficiency * minutes_multiplier
 
             self._register_feature('mp_efficiency_core', 'core_predictive')
@@ -645,7 +676,10 @@ class ThreePointsFeatureEngineer:
             self._register_feature('offensive_volume', 'core_predictive')
             
             # Volume trend con múltiples capas
-            df['volume_trend'] = self._safe_divide(fga_avg, fga_season + 1, 1.0)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df['volume_trend'] = fga_avg / (fga_season + 1)
+                df['volume_trend'] = df['volume_trend'].fillna(1.0).replace([np.inf, -np.inf], 1.0)
             self._register_feature('volume_trend', 'core_predictive')
 
     def _generate_elite_predictive_features(self, df: pd.DataFrame) -> None:
@@ -669,12 +703,18 @@ class ThreePointsFeatureEngineer:
             two_p_avg = fg_avg - three_p_avg
             
             # Shot making ability por tipo
-            three_p_acc = self._safe_divide(three_p_avg, three_pa_avg, 0.35)
-            two_p_acc = self._safe_divide(two_p_avg, two_pa_avg, 0.50)
-            
-            # Shot difficulty profile (mezcla eficiencia con volumen)
-            three_p_rate = self._safe_divide(three_pa_avg, fga_avg, 0.33)
-            two_p_rate = self._safe_divide(two_pa_avg, fga_avg, 0.67)
+            # Divisiones simples con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                three_p_acc = three_p_avg / three_pa_avg
+                three_p_acc = three_p_acc.fillna(0.35).replace([np.inf, -np.inf], 0.35)
+                two_p_acc = two_p_avg / two_pa_avg
+                two_p_acc = two_p_acc.fillna(0.50).replace([np.inf, -np.inf], 0.50)
+                
+                # Shot difficulty profile (mezcla eficiencia con volumen)
+                three_p_rate = three_pa_avg / fga_avg
+                three_p_rate = three_p_rate.fillna(0.33).replace([np.inf, -np.inf], 0.33)
+                two_p_rate = two_pa_avg / fga_avg
+                two_p_rate = two_p_rate.fillna(0.67).replace([np.inf, -np.inf], 0.67)
             df['shot_difficulty_mastery'] = (three_p_acc * three_p_rate) + (two_p_acc * two_p_rate)
             
             self._register_feature('shot_difficulty_mastery', 'efficiency_metrics')  # 2.05% importance
@@ -685,7 +725,10 @@ class ThreePointsFeatureEngineer:
             gmsc_avg = self._get_historical_series(df, 'efficiency_game_score', self.windows['medium'], 'mean')
             gmsc_long = self._get_historical_series(df, 'efficiency_game_score', self.windows['long'], 'mean')
             
-            df['game_impact_momentum'] = self._safe_divide(gmsc_avg, gmsc_long + 1, 1.0)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df['game_impact_momentum'] = gmsc_avg / (gmsc_long + 1)
+                df['game_impact_momentum'] = df['game_impact_momentum'].fillna(1.0).replace([np.inf, -np.inf], 1.0)
                         
             self._register_feature('game_impact_momentum', 'core_predictive')
         
@@ -791,8 +834,9 @@ class ThreePointsFeatureEngineer:
                 
                 return pd.Series(streaks, index=group.index)
             
-            df['current_streak'] = df.groupby('player')['three_points_made'].apply(calculate_streak_no_leak).reset_index(level=0, drop=True)
-                        
+            current_streak = df.groupby('player')['three_points_made'].apply(calculate_streak_no_leak)
+            current_streak = current_streak.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
+            df['current_streak'] = current_streak                        
             self._register_feature('current_streak', 'core_predictive')
         
         # Contextuales del Partido AVANZADOS
@@ -835,13 +879,15 @@ class ThreePointsFeatureEngineer:
             # Aplicar función
             home_away_perf = df.groupby('player')[['is_home', 'three_points_made']].apply(
                 calculate_historical_home_away
-            ).reset_index(level=0, drop=True)
+            )
+            home_away_perf = home_away_perf.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             
             df['home_performance'] = home_away_perf['home_performance']
             df['away_performance'] = home_away_perf['away_performance']
             
             # Fill NaN con promedio general del jugador
-            player_avg_hist = df.groupby('player')['three_points_made'].expanding().mean().shift(1).reset_index(level=0, drop=True)
+            player_avg_hist = df.groupby('player')['three_points_made'].expanding().mean().shift(1)
+            player_avg_hist = player_avg_hist.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             GLOBAL_THREEP_MEAN = 1.5  # Promedio histórico NBA aproximado - CONSTANTE SIN DATA LEAKAGE
             df['home_performance'] = df['home_performance'].fillna(player_avg_hist).fillna(GLOBAL_THREEP_MEAN)
             df['away_performance'] = df['away_performance'].fillna(player_avg_hist).fillna(GLOBAL_THREEP_MEAN)
@@ -902,9 +948,11 @@ class ThreePointsFeatureEngineer:
                             results.append(np.nan)
                 return pd.Series(results, index=group.index)
             
-            df['player_overall_avg'] = df.groupby('player')['three_points_made'].apply(
+            player_overall_avg = df.groupby('player')['three_points_made'].apply(
                 calculate_historical_overall
-            ).reset_index(level=0, drop=True)
+            )
+            player_overall_avg = player_overall_avg.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
+            df['player_overall_avg'] = player_overall_avg
             
             # Fill NaN with defaults and calculate advantage
             GLOBAL_THREEP_MEAN = 1.5  # Promedio histórico NBA aproximado
@@ -948,7 +996,8 @@ class ThreePointsFeatureEngineer:
                 # Calcular promedio de asistencias por equipo basado en datos históricos
                 team_ast_rolling = df.groupby('Team')['three_points_made'].rolling(
                     window=10, min_periods=1
-                ).mean().shift(1).reset_index(0, drop=True)
+                ).mean().shift(1)
+                team_ast_rolling = team_ast_rolling.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
                 
                 # Asignar con manejo de índices
                 if len(team_ast_rolling) == len(df):
@@ -1105,23 +1154,22 @@ class ThreePointsFeatureEngineer:
         logger.debug("Generando features de cuartos para TRIPLES...")
         
         if self.players_quarters_df is None:
-            logger.warning("Dataset de cuartos no disponible")
+            logger.debug("Dataset de cuartos no disponible - saltando features de cuartos")
             return
             
         # 1. CLUTCH SHOOTING (Q4)
         if self._register_feature('clutch_three_shooting', 'top_features'):
             # Promedio de triples en situaciones clutch (Q4)
-            q4_data = self.players_quarters_df[self.players_quarters_df['quarter'] == 4]
-            if not q4_data.empty:
-                clutch_avg = q4_data.groupby('player')['three_points_made'].apply(
-                    lambda x: self._get_historical_series(x.to_frame(), 'three_points_made', window=5, operation='mean')
-                ).reset_index(0, drop=True)
-                
-                # Mapear a DataFrame principal
+            q4_data = self.players_quarters_df[self.players_quarters_df['quarter'] == 4].copy()
+            if not q4_data.empty and 'three_points_made' in q4_data.columns:
+                # Calcular promedio por jugador (usando datos históricos completos de Q4)
                 clutch_mapping = {}
                 for player in q4_data['player'].unique():
-                    if player in clutch_avg.index:
-                        clutch_mapping[player] = clutch_avg[player]
+                    player_q4 = q4_data[q4_data['player'] == player]
+                    if len(player_q4) >= 3:
+                        # Promedio móvil de últimos 5 juegos en Q4
+                        player_avg = player_q4['three_points_made'].tail(5).mean()
+                        clutch_mapping[player] = player_avg if not pd.isna(player_avg) else 0.8
                     else:
                         clutch_mapping[player] = 0.8
                 
@@ -1132,20 +1180,20 @@ class ThreePointsFeatureEngineer:
         # 2. EARLY GAME THREE AGGRESSION (Q1-Q2)
         if self._register_feature('early_game_three_aggression', 'top_features'):
             # Agresividad en triples durante primeros dos cuartos
-            early_quarters = self.players_quarters_df[self.players_quarters_df['quarter'].isin([1, 2])]
-            if not early_quarters.empty:
-                early_aggression = early_quarters.groupby('player')['three_points_att'].apply(
-                    lambda x: self._get_historical_series(x.to_frame(), 'three_points_att', window=5, operation='mean')
-                ).reset_index(0, drop=True)
-                
-                # Mapear a DataFrame principal
-                aggression_mapping = {}
+            early_quarters = self.players_quarters_df[self.players_quarters_df['quarter'].isin([1, 2])].copy()
+            if not early_quarters.empty and 'three_points_att' in early_quarters.columns:
+                # Calcular promedio de intentos por jugador
+                early_mapping = {}
                 for player in early_quarters['player'].unique():
-                    if player in early_aggression.index:
-                        aggression_mapping[player] = early_aggression[player]
+                    player_early = early_quarters[early_quarters['player'] == player]
+                    if len(player_early) >= 3:
+                        # Promedio móvil de últimos 5 juegos en Q1-Q2
+                        player_att = player_early['three_points_att'].tail(5).mean()
+                        early_mapping[player] = player_att if not pd.isna(player_att) else 0.5
                     else:
-                        aggression_mapping[player] = 2.0
+                        early_mapping[player] = 0.5
                 
-                df['early_game_three_aggression'] = df['player'].map(aggression_mapping).fillna(2.0)
+                df['early_game_three_aggression'] = df['player'].map(early_mapping).fillna(0.5)
             else:
-                df['early_game_three_aggression'] = 2.0
+                df['early_game_three_aggression'] = 0.5
+

@@ -105,7 +105,6 @@ class XGBoostASTTrainer:
         # Crear directorio de salida con manejo robusto
         try:
             os.makedirs(self.output_dir, exist_ok=True)
-            logger.info(f"Directorio de salida creado/verificado: {self.output_dir}")
         except Exception as e:
             logger.error(f"Error creando directorio {self.output_dir}: {e}")
             # Crear directorio alternativo en caso de error
@@ -148,7 +147,7 @@ class XGBoostASTTrainer:
         logger.info("Cargando datos NBA")
         
         # Cargar datos usando el data loader
-        self.df, self.teams_df = self.data_loader.load_data()
+        self.df, self.teams_df, players_quarters, teams_quarters = self.data_loader.load_data()
         
         # Cargar datos de quarters para features avanzadas
         self.players_quarters_df = pd.read_csv(self.players_quarters_path)
@@ -955,7 +954,7 @@ MODELOS BASE:
             importance_path = os.path.normpath(os.path.join(self.output_dir, 'feature_importance.csv'))
             importance_df.to_csv(importance_path, index=False)
             
-            logger.info(f"✅ Feature importance exportada: {total_features} features completas en {importance_path}")
+            logger.info(f" Feature importance exportada: {total_features} features completas en {importance_path}")
         
         # Crear resumen de archivos generados
         files_summary = {

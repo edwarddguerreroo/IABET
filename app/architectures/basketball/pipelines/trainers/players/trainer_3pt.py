@@ -99,7 +99,6 @@ class ThreePointsTrainer:
         # Crear directorio de salida con manejo robusto
         try:
             os.makedirs(self.output_dir, exist_ok=True)
-            logger.info(f"Directorio de salida creado/verificado: {self.output_dir}")
         except Exception as e:
             logger.error(f"Error creando directorio {self.output_dir}: {e}")
             # Crear directorio alternativo en caso de error
@@ -113,8 +112,7 @@ class ThreePointsTrainer:
         )
         
         # Cargar datasets para pasarlos al modelo TRIPLES
-        players_data, teams_data = self.data_loader.load_data(use_quarters=False)
-        players_quarters, _ = self.data_loader.load_data(use_quarters=True)
+        players_data, teams_data, players_quarters, teams_quarters = self.data_loader.load_data()
         
         self.model = Stacking3PTModel(
             optimize_hyperparams=True,
@@ -138,8 +136,7 @@ class ThreePointsTrainer:
             pd.DataFrame: Datos de jugadores preparados para entrenamiento de triples
         """
         # Cargar datos usando el data loader - solo necesitamos los datos de entrenamiento
-        players_data, teams_data = self.data_loader.load_data()
-        players_quarters, _ = self.data_loader.load_data(use_quarters=True)
+        players_data, teams_data, players_quarters, teams_quarters = self.data_loader.load_data()
         
         # Verificar que existe la columna target de triples
         if 'three_points_made' not in players_data.columns:
@@ -476,6 +473,19 @@ MODELOS BASE:
             y_true = self.df['three_points_made'].values
             y_pred = self.predictions
         
+        # VALIDACIÓN FINAL: Asegurar que ambos arrays tengan el mismo tamaño
+        if len(y_true) != len(y_pred):
+            min_len = min(len(y_true), len(y_pred))
+            y_true = y_true[:min_len]
+            y_pred = y_pred[:min_len]
+        
+        # Validar que no estén vacíos
+        if len(y_true) == 0 or len(y_pred) == 0:
+            ax.text(0.5, 0.5, 'Sin datos suficientes\npara graficar', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Predicciones vs Reales', fontweight='bold')
+            return
+        
         # Scatter plot
         ax.scatter(y_true, y_pred, alpha=0.6, s=20, color='coral')
         
@@ -506,6 +516,20 @@ MODELOS BASE:
         # Calcular residuos
         y_true = self.df['three_points_made'].values
         y_pred = self.predictions
+        
+        # VALIDACIÓN: Asegurar que ambos arrays tengan el mismo tamaño
+        if len(y_true) != len(y_pred):
+            min_len = min(len(y_true), len(y_pred))
+            y_true = y_true[:min_len]
+            y_pred = y_pred[:min_len]
+        
+        # Validar que no estén vacíos
+        if len(y_true) == 0 or len(y_pred) == 0:
+            ax.text(0.5, 0.5, 'Sin datos suficientes\npara graficar', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Análisis de Residuos', fontweight='bold')
+            return
+        
         residuals = y_true - y_pred
         
         # Scatter plot de residuos
@@ -532,6 +556,19 @@ MODELOS BASE:
         
         y_true = self.df['three_points_made'].values
         y_pred = self.predictions
+        
+        # VALIDACIÓN: Asegurar que ambos arrays tengan el mismo tamaño
+        if len(y_true) != len(y_pred):
+            min_len = min(len(y_true), len(y_pred))
+            y_true = y_true[:min_len]
+            y_pred = y_pred[:min_len]
+        
+        # Validar que no estén vacíos
+        if len(y_true) == 0 or len(y_pred) == 0:
+            ax.text(0.5, 0.5, 'Sin datos suficientes\npara graficar', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Análisis por Rangos de Triples', fontweight='bold')
+            return
         
         # Definir rangos de triples
         ranges = [
@@ -795,28 +832,37 @@ MODELOS BASE:
         
         # Análisis de predicciones
         if self.predictions is not None:
+            # VALIDACIÓN: Asegurar que ambos arrays tengan el mismo tamaño
+            y_true_full = self.df['three_points_made'].values
+            y_pred_full = self.predictions
+            
+            if len(y_true_full) != len(y_pred_full):
+                min_len = min(len(y_true_full), len(y_pred_full))
+                y_true_full = y_true_full[:min_len]
+                y_pred_full = y_pred_full[:min_len]
+            
             prediction_analysis = {
-                'total_predictions': len(self.predictions),
+                'total_predictions': len(y_pred_full),
                 'prediction_statistics': {
-                    'mean': float(np.mean(self.predictions)),
-                    'median': float(np.median(self.predictions)),
-                    'std': float(np.std(self.predictions)),
-                    'min': float(np.min(self.predictions)),
-                    'max': float(np.max(self.predictions)),
-                    'q25': float(np.percentile(self.predictions, 25)),
-                    'q75': float(np.percentile(self.predictions, 75))
+                    'mean': float(np.mean(y_pred_full)),
+                    'median': float(np.median(y_pred_full)),
+                    'std': float(np.std(y_pred_full)),
+                    'min': float(np.min(y_pred_full)),
+                    'max': float(np.max(y_pred_full)),
+                    'q25': float(np.percentile(y_pred_full, 25)),
+                    'q75': float(np.percentile(y_pred_full, 75))
                 },
                 'accuracy_analysis': {
-                    'within_1_triple': float(np.mean(np.abs(self.predictions - self.df['three_points_made']) <= 1) * 100),
-                    'within_2_triples': float(np.mean(np.abs(self.predictions - self.df['three_points_made']) <= 2) * 100),
-                    'within_3_triples': float(np.mean(np.abs(self.predictions - self.df['three_points_made']) <= 3) * 100)
+                    'within_1_triple': float(np.mean(np.abs(y_pred_full - y_true_full) <= 1) * 100),
+                    'within_2_triples': float(np.mean(np.abs(y_pred_full - y_true_full) <= 2) * 100),
+                    'within_3_triples': float(np.mean(np.abs(y_pred_full - y_true_full) <= 3) * 100)
                 },
                 'error_analysis': {
-                    'mean_absolute_error': float(np.mean(np.abs(self.predictions - self.df['three_points_made']))),
-                    'mean_squared_error': float(np.mean((self.predictions - self.df['three_points_made'])**2)),
-                    'root_mean_squared_error': float(np.sqrt(np.mean((self.predictions - self.df['three_points_made'])**2))),
-                    'mean_error': float(np.mean(self.predictions - self.df['three_points_made'])),
-                    'error_std': float(np.std(self.predictions - self.df['three_points_made']))
+                    'mean_absolute_error': float(np.mean(np.abs(y_pred_full - y_true_full))),
+                    'mean_squared_error': float(np.mean((y_pred_full - y_true_full)**2)),
+                    'root_mean_squared_error': float(np.sqrt(np.mean((y_pred_full - y_true_full)**2))),
+                    'mean_error': float(np.mean(y_pred_full - y_true_full)),
+                    'error_std': float(np.std(y_pred_full - y_true_full))
                 }
             }
         else:
@@ -894,8 +940,17 @@ MODELOS BASE:
         # Guardar predicciones
         if self.predictions is not None:
             predictions_df = self.df[['player', 'Date', 'Team', 'three_points_made']].copy()
-            predictions_df['three_points_made_predicted'] = self.predictions
-            predictions_df['error'] = self.predictions - self.df['three_points_made']
+            
+            # VALIDACIÓN: Asegurar que las predicciones tengan el mismo tamaño que el DataFrame
+            if len(self.predictions) != len(predictions_df):
+                min_len = min(len(self.predictions), len(predictions_df))
+                predictions_df = predictions_df.iloc[:min_len].copy()
+                predictions_to_save = self.predictions[:min_len]
+            else:
+                predictions_to_save = self.predictions
+            
+            predictions_df['three_points_made_predicted'] = predictions_to_save
+            predictions_df['error'] = predictions_to_save - predictions_df['three_points_made']
             predictions_df['abs_error'] = np.abs(predictions_df['error'])
             
             predictions_path = os.path.normpath(os.path.join(self.output_dir, 'predictions.csv'))

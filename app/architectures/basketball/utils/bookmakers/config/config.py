@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Configuración limpia para Basketball Betting System - Solo 2 APIs
 DEFAULT_CONFIG = {
     # =============================================================================
-    # 🏀 PLAYER PROPS API - Solo para jugadores (PTS, AST, TRB, 3PT, DD)
+    #  PLAYER PROPS API - Solo para jugadores (PTS, AST, TRB, 3PT, DD)
     # =============================================================================
     'player_props_api': {
         'base_url': 'https://api.sportradar.com/oddscomparison-player-props/trial/v2',
@@ -32,19 +32,22 @@ DEFAULT_CONFIG = {
         'cache_duration': 300,
         'cache_enabled': True,
         
-        # Endpoints para Player Props - VERIFICADOS ✅
+        # Endpoints para Player Props - VERIFICADOS 
         'endpoints': {
             # Schedules para obtener sport_event_ids
-            'schedules': 'en/sports/{sport_id}/schedules/{date}/schedules',  # ✅ VERIFICADO - 977 bytes, 2 eventos
+            'schedules': 'en/sports/{sport_id}/schedules/{date}/schedules.json',  #  VERIFICADO - 977 bytes, 2 eventos
             
             # Player Props por evento específico  
-            'player_props_by_event': 'en/sport_events/{event_id}/players_props',  # ✅ VERIFICADO - 204KB, 11 jugadores, 8 mercados
+            'player_props_by_event': 'en/sport_events/{event_id}/players_props.json',  #  VERIFICADO - 204KB, 11 jugadores, 8 mercados
             
             # Player Props por fecha específica
-            'player_props_by_date': 'en/sports/{sport_id}/schedules/{date}/players_props',  # ✅ VERIFICADO - 143KB
+            'player_props_by_date': 'en/sports/{sport_id}/schedules/{date}/players_props.json',  #  VERIFICADO - 143KB
+            
+            # Schedules por competición
+            'schedules_by_competition': 'en/competitions/{competition_id}/schedules.json',  #  VERIFICADO - para obtener próximos partidos
         },
         
-        # Market IDs reales para jugadores - VERIFICADOS ✅
+        # Market IDs reales para jugadores - VERIFICADOS 
         'market_ids': {
             'PTS': 'sr:market:921',  # total points (incl. overtime)
             'AST': 'sr:market:922',  # total assists (incl. overtime)
@@ -53,7 +56,7 @@ DEFAULT_CONFIG = {
             'DD': 'sr:market:8008',  # double double (incl. extra overtime)
         },
         
-        # Mapeo de targets a nombres de mercados - VERIFICADOS ✅
+        # Mapeo de targets a nombres de mercados - VERIFICADOS 
         'target_to_market': {
             'PTS': ['total points (incl. overtime)'],
             'AST': ['total assists (incl. overtime)'],
@@ -77,34 +80,37 @@ DEFAULT_CONFIG = {
         'cache_duration': 300,
         'cache_enabled': True,
         
-        # Endpoints para Team Odds - VERIFICADOS ✅
+        # Endpoints para Team Odds - VERIFICADOS 
         'endpoints': {
             # Team Odds por fecha (mejor opción)
-            'team_odds_by_date': 'en/sports/{sport_id}/schedules/{date}/sport_event_markets.json',  # ✅ VERIFICADO - 123KB, funciona con .json
+            'team_odds_by_date': 'en/sports/{sport_id}/schedules/{date}/sport_event_markets.json',  #  VERIFICADO - 123KB
             
             # Team Odds por evento específico
-            'team_odds_by_event': 'en/sport_events/{event_id}/sport_event_markets.json',  # ✅ VERIFICADO - funciona con .json
+            'team_odds_by_event': 'en/sport_events/{event_id}/sport_event_markets.json',  #  VERIFICADO
+            
+            # Schedules para obtener eventos programados
+            'schedules': 'en/sports/{sport_id}/schedules/{date}/schedules.json',  #  VERIFICADO
         },
         
-        # Market IDs reales para equipos - VERIFICADOS ✅
+        # Market IDs reales para equipos - VERIFICADOS 
         'market_ids': {
             'is_win': 'sr:market:219',        # winner (incl. overtime) - MEJOR OPCIÓN
             'total_points': 'sr:market:225',  # total (incl. overtime)
             'home_points': 'sr:market:227',   # home total (incl. overtime)
             'away_points': 'sr:market:228',   # away total (incl. overtime)
             
-            # Halftime markets - VERIFICADOS ✅
+            # Halftime markets - VERIFICADOS 
             'ht_total_points': 'sr:market:68',    # 1st half - total (puntos totales HT)
             'ht_teams_points': 'sr:market:66',    # 1st half - handicap (puntos por equipo HT)
         },
         
-        # Mapeo de targets a nombres de mercados - VERIFICADOS ✅
+        # Mapeo de targets a nombres de mercados - VERIFICADOS 
         'target_to_market': {
             'is_win': ['winner (incl. overtime)'],
             'total_points': ['total (incl. overtime)'],
             'teams_points': ['home total (incl. overtime)', 'away total (incl. overtime)'],
             
-            # Halftime markets - VERIFICADOS ✅
+            # Halftime markets - VERIFICADOS 
             'ht_total_points': ['1st half - total'],
             'ht_teams_points': ['1st half - handicap']
         }
@@ -119,6 +125,14 @@ DEFAULT_CONFIG = {
         'cache_max_entries': 10000,
         'cache_stats_enabled': True,
         'min_historical_games': 5       # Mínimo de juegos para análisis
+    },
+    'betting': {
+        'minimum_edge': 0.05,           # 5% de edge mínimo para apostar
+        'confidence_threshold': 0.65,   # 65% de confianza mínima
+        'max_kelly_fraction': 0.25,     # Máximo 25% de Kelly para gestión de bankroll
+        'min_odds': 1.2,                # Odds mínimas para considerar
+        'max_odds': 10.0,               # Odds máximas para considerar
+        'bankroll_percentage': 0.02     # 2% del bankroll por apuesta
     },
     'analysis': {
         'lookback_days': 60,

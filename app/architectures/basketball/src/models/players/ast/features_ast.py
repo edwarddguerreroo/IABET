@@ -67,31 +67,54 @@ class AssistsFeatureEngineer:
     
     def _get_historical_series(self, df: pd.DataFrame, column: str, window: int, operation: str = 'mean') -> pd.Series:
         """
-        Cálculo rolling optimizado con cache para evitar duplicados
+        Cálculo rolling optimizado con validación robusta de índices
         SIEMPRE usa shift(1) para prevenir data leakage (futuros juegos)
         """
-        cache_key = f"{column}_{window}_{operation}"
-        
-        if cache_key in self._rolling_cache:
-            return self._rolling_cache[cache_key]
-        
+        # Validar entrada
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError("df debe ser un DataFrame")
         if column not in df.columns:
-            result = pd.Series(0, index=df.index)
-        else:
+            logger.warning(f" Columna '{column}' no encontrada, retornando ceros")
+            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+        
+        # Validar que df esté ordenado cronológicamente
+        if 'Date' in df.columns and not df['Date'].is_monotonic_increasing:
+            df = df.sort_values(['player', 'Date']).reset_index(drop=True)
+        
+        # Calcular rolling con validación de índices
+        try:
             if operation == 'mean':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
             elif operation == 'std':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=2).std().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=2).std().shift(1).fillna(0)
             elif operation == 'max':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).max().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).max().shift(1).fillna(0)
             elif operation == 'sum':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).sum().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).sum().shift(1).fillna(0)
             else:
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().reset_index(0, drop=True).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
             
-            self._rolling_cache[cache_key] = result
+            # Validar que result tenga MultiIndex
+            if isinstance(result.index, pd.MultiIndex):
+                # Reset del MultiIndex a índice simple
+                result = result.reset_index(level=0, drop=True)
+            
+            # Validar alineación de índices antes de reindex
+            if not result.index.equals(df.index):
+                logger.debug(f"Reindexando {column}_{window}_{operation} para alinear índices")
+                result = result.reindex(df.index, fill_value=0)
+            
+            # Validar resultado final
+            if len(result) != len(df):
+                logger.error(f" Error: Longitud de resultado ({len(result)}) != DataFrame ({len(df)})")
+                return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+            
             return result
-
+            
+        except Exception as e:
+            logger.error(f" Error calculando {column}_{window}_{operation}: {e}")
+            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+            
     def _convert_mp_to_numeric(self, df: pd.DataFrame) -> None:
         """Convierte columna minutes (minutos jugados) de formato MM:SS a decimal o usa 'minutes' si existe"""
         # Priorizar 'minutes' del nuevo dataset si existe
@@ -401,7 +424,8 @@ class AssistsFeatureEngineer:
         # 8. EXTREME GAME FREQUENCY (frecuencia de 10+ asistencias)
         if self._register_feature('extreme_ast_game_freq', 'assists_history'):
             # Calcular frecuencia de juegos con 10+ asistencias por jugador
-            extreme_game_freq = df.groupby('player')['assists'].apply(lambda x: (x.shift(1) >= 10).rolling(20, min_periods=5).mean()).reset_index(0, drop=True)
+            extreme_game_freq = df.groupby('player')['assists'].apply(lambda x: (x.shift(1) >= 10).rolling(20, min_periods=5).mean())
+            extreme_game_freq = extreme_game_freq.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             df['extreme_ast_game_freq'] = extreme_game_freq.fillna(0).clip(0, 1)
 
     def _create_basic_historical_features(self, df: pd.DataFrame) -> None:

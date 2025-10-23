@@ -71,7 +71,7 @@ class PrecisionSimulator(NBAGameSimulator):
             'prediction_stability': {}
         }
         
-        self.logger.info("🎯 Simulador de PRECISIÓN EXTREMA inicializado")
+        self.logger.info(" Simulador de PRECISIÓN EXTREMA inicializado")
         self.logger.info(f"Configurado con {len(self.precision_config['simulation_methods'])} métodos de simulación")
         self.logger.info(f"Usando {len(self.precision_config['validation_methods'])} métodos de validación")
     
@@ -98,7 +98,7 @@ class PrecisionSimulator(NBAGameSimulator):
         """
         Simula partido con precisión extrema usando múltiples métodos
         """
-        self.logger.info(f"🚀 SIMULACIÓN DE PRECISIÓN EXTREMA: {away_team} @ {home_team}")
+        self.logger.info(f" SIMULACIÓN DE PRECISIÓN EXTREMA: {away_team} @ {home_team}")
         
         # Preparar contexto mejorado
         enhanced_context = self._prepare_enhanced_context(context or {})
@@ -112,7 +112,7 @@ class PrecisionSimulator(NBAGameSimulator):
                     method, home_team, away_team, enhanced_context
                 )
                 simulation_results[method] = method_results
-                self.logger.info(f"✅ Método {method} completado")
+                self.logger.info(f" Método {method} completado")
                 
             except Exception as e:
                 self.logger.warning(f"Error en método {method}: {e}")
@@ -151,7 +151,7 @@ class PrecisionSimulator(NBAGameSimulator):
             'prediction_quality': self._assess_prediction_quality(integrated_results)
         }
         
-        self.logger.info(f"🎯 Simulación completada con confianza general: {confidence_metrics['overall_confidence']:.1%}")
+        self.logger.info(f" Simulación completada con confianza general: {confidence_metrics['overall_confidence']:.1%}")
         
         return final_results
     

@@ -84,15 +84,15 @@ class TRBPredictor:
                 teams_quarters_path="app/architectures/basketball/data/teams_quarters.csv",
                 biometrics_path="app/architectures/basketball/data/biometrics.csv"
             )
-            self.historical_players, self.historical_teams = data_loader.load_data()
+            self.historical_players, self.historical_teams, self.historical_players_quarters, self.historical_teams_quarters = data_loader.load_data()
             
             # Inicializar modelo TRB completo (wrapper)
-            logger.info("🤖 Inicializando modelo TRB completo (wrapper)...")
+            logger.info(" Inicializando modelo TRB completo (wrapper)...")
             self.model = XGBoostTRBModel(teams_df=self.historical_teams)
             
             # Cargar modelo entrenado
             model_path = "app/architectures/basketball/.joblib/trb_model.joblib"
-            logger.info(f"📦 Cargando modelo desde: {model_path}")
+            logger.info(f" Cargando modelo desde: {model_path}")
             self.model.load_model(model_path)
             
             self.is_loaded = True
@@ -100,7 +100,7 @@ class TRBPredictor:
             return True
             
         except Exception as e:
-            logger.error(f"❌ Error cargando datos y modelo: {e}")
+            logger.error(f" Error cargando datos y modelo: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -144,7 +144,7 @@ class TRBPredictor:
             available_players = self.confidence_calculator.filter_available_players_from_roster(game_data)
             
             if target_player not in available_players:
-                logger.info(f"❌ {target_player} no disponible en el roster")
+                logger.info(f" {target_player} no disponible en el roster")
                 return None
      
             # Extraer información adicional desde SportRadar
@@ -167,9 +167,9 @@ class TRBPredictor:
                 opponent_team = home_team_abbr
                 opponent_team_id = game_data.get('homeTeam', {}).get('teamId', '')
             else:
-                # Fallback a datos históricos si no coincide
-                opponent_team = player_data.get('Opp', 'Unknown')
-                opponent_team_id = ''
+                error_msg = f"No se pudo determinar el oponente para {target_player}: equipo actual {current_team_abbr} no coincide con home ({home_team_abbr}) ni away ({away_team_abbr})"
+                logger.error(f" {error_msg}")
+                return None
             
             # Agregar información extraída al player_data
             player_data['is_home'] = is_home
@@ -190,11 +190,11 @@ class TRBPredictor:
             prediction_result = self.predict_single_player(player_data, game_data)
             
             if prediction_result is None:
-                logger.info(f"⚠️  Predicción no realizada, es menor a 4 rebotes")
+                logger.info(f"  Predicción no realizada, es menor a 4 rebotes")
                 return None
             
             if 'error' in prediction_result:
-                logger.error(f"❌ Error en predicción interna: {prediction_result['error']}")
+                logger.error(f" Error en predicción interna: {prediction_result['error']}")
                 return None
             
             # Extraer predicción y confianza
@@ -219,7 +219,7 @@ class TRBPredictor:
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en predicción desde SportRadar: {e}")
+            logger.error(f" Error en predicción desde SportRadar: {e}")
             return {'error': f'Error procesando datos de SportRadar: {str(e)}'}
     
     def predict_single_player(self, player_data: Dict[str, Any], game_data: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -249,73 +249,102 @@ class TRBPredictor:
             player_historical_df = self.common_utils._smart_player_search(self.historical_players, player_name)
             
             if player_historical_df.empty:
-                logger.warning(f"⚠️ No se encontraron datos históricos para {player_name}")
-                # Usar datos de jugadores similares o promedio
-                player_historical = self.historical_players.head(100).copy()
-            else:
-                player_historical = player_historical_df.copy()
-                logger.info(f"✅ Encontrados {len(player_historical)} registros históricos para {player_name}")
+                error_msg = f"No se encontraron datos históricos para {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
             
-            # Intentar usar datos del equipo actual primero, si no hay suficientes usar historial completo
-            if len(player_historical) > 0 and current_team != 'Unknown':
+            player_historical = player_historical_df.copy()
+            logger.info(f" Encontrados {len(player_historical)} registros históricos para {player_name}")
+            
+            # Verificar mínimo de datos requerido
+            if len(player_historical) < 5:
+                error_msg = f"Datos insuficientes para {player_name}: solo {len(player_historical)} juegos (mínimo requerido: 5)"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            # Usar datos del equipo actual SIEMPRE que sea posible
+            if current_team != 'Unknown':
                 current_team_data = player_historical[player_historical['Team'] == current_team]
                 if len(current_team_data) >= 5:  # Mínimo 5 juegos con el equipo actual
                     player_historical = current_team_data.copy()
-                    logger.info(f"🏀 Usando {len(player_historical)} registros del equipo actual ({current_team}) para {player_name}")
+                    logger.info(f" Usando {len(player_historical)} registros del equipo actual ({current_team}) para {player_name}")
                 else:
-                    # Si no hay suficientes datos del equipo actual, usar TODOS los datos históricos
-                    logger.info(f"📅 Pocos datos de {current_team} ({len(current_team_data)} juegos), usando TODOS los {len(player_historical)} registros históricos para {player_name}")
+                    error_msg = f"Datos insuficientes del equipo actual {current_team} para {player_name}: solo {len(current_team_data)} juegos (mínimo requerido: 5)"
+                    logger.error(f" {error_msg}")
+                    return {'error': error_msg}
             else:
-                logger.info(f"🏀 Usando TODOS los {len(player_historical)} registros históricos para {player_name} (sin filtro por equipo)")
+                logger.info(f" Usando TODOS los {len(player_historical)} registros históricos para {player_name}")
             
             combined_df = player_historical.copy()
             
             # Hacer predicción 
             predictions = self.model.predict(combined_df)
             
+            if len(predictions) == 0:
+                error_msg = f"Modelo no generó predicciones para {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
             last_row = combined_df.iloc[-1]
             nan_count = last_row.isna().sum()
 
             # Extraer la última predicción (corresponde al último juego histórico, el más reciente)
-            if len(predictions) > 0:
-                raw_prediction = predictions[-1]
-                recent_predictions = predictions[-5:] if len(predictions) >= 5 else predictions
-            else:
-                raw_prediction = 0
-                recent_predictions = []
+            raw_prediction = predictions[-1]
+            recent_predictions = predictions[-5:] if len(predictions) >= 5 else predictions
+            
+            # CALCULAR MÉTRICAS DETALLADAS PARA CONFIANZA Y PREDICTION_DETAILS (SIN FALLBACKS)
+            if 'rebounds' not in player_historical.columns:
+                error_msg = f"Columna 'rebounds' no encontrada en datos históricos de {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            historical_reb = player_historical['rebounds'].dropna()
+            
+            if len(historical_reb) < 5:
+                error_msg = f"Datos insuficientes de rebotes para {player_name}: solo {len(historical_reb)} juegos válidos (mínimo requerido: 5)"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
             
             # Calcular estadísticas para confianza
-            actual_stats_mean = player_historical['rebounds'].mean() if len(player_historical) > 0 else 0
-            actual_stats_std = player_historical['rebounds'].std() if len(player_historical) > 0 else 0
+            actual_stats_mean = historical_reb.mean()
+            actual_stats_std = historical_reb.std() if len(historical_reb) > 1 else 1.0
             prediction_std = np.std(recent_predictions) if len(recent_predictions) > 1 else 0
             
-            # CALCULAR ESTADÍSTICAS DETALLADAS PARA PREDICTION_DETAILS
+            # ESTADÍSTICAS DETALLADAS PARA PREDICTION_DETAILS
             # Últimos 5 juegos
-            last_5_games = player_historical.tail(5)['rebounds'] if len(player_historical) >= 5 else player_historical['rebounds']
+            last_5_games = historical_reb.tail(5)
             last_5_stats = {
-                'mean': round(last_5_games.mean(), 1) if len(last_5_games) > 0 else 0,
+                'mean': round(last_5_games.mean(), 1),
                 'std': round(last_5_games.std(), 1) if len(last_5_games) > 1 else 0,
-                'min': int(last_5_games.min()) if len(last_5_games) > 0 else 0,
-                'max': int(last_5_games.max()) if len(last_5_games) > 0 else 0,
+                'min': int(last_5_games.min()),
+                'max': int(last_5_games.max()),
                 'count': len(last_5_games)
             }
             
             # Últimos 10 juegos
-            last_10_games = player_historical.tail(10)['rebounds'] if len(player_historical) >= 10 else player_historical['rebounds']
-            last_10_stats = {
-                'mean': round(last_10_games.mean(), 1) if len(last_10_games) > 0 else 0,
-                'std': round(last_10_games.std(), 1) if len(last_10_games) > 1 else 0,
-                'min': int(last_10_games.min()) if len(last_10_games) > 0 else 0,
-                'max': int(last_10_games.max()) if len(last_10_games) > 0 else 0,
-                'count': len(last_10_games)
-            }
-            
-            # Análisis de tendencia
-            if len(player_historical) >= 5:
+            if len(historical_reb) >= 10:
+                last_10_games = historical_reb.tail(10)
+                last_10_stats = {
+                    'mean': round(last_10_games.mean(), 1),
+                    'std': round(last_10_games.std(), 1),
+                    'min': int(last_10_games.min()),
+                    'max': int(last_10_games.max()),
+                    'count': len(last_10_games)
+                }
+                
+                # Análisis de tendencia
                 recent_5_mean = last_5_games.mean()
-                recent_10_mean = last_10_games.mean() if len(player_historical) >= 10 else recent_5_mean
+                recent_10_mean = last_10_games.mean()
                 trend_5_games = recent_5_mean - recent_10_mean
             else:
+                # Si hay menos de 10 juegos, usar todos los disponibles
+                last_10_stats = {
+                    'mean': round(actual_stats_mean, 1),
+                    'std': round(actual_stats_std, 1),
+                    'min': int(historical_reb.min()),
+                    'max': int(historical_reb.max()),
+                    'count': len(historical_reb)
+                }
                 trend_5_games = 0
                 recent_5_mean = actual_stats_mean
             
@@ -323,7 +352,10 @@ class TRBPredictor:
             consistency_score = max(0, 100 - (actual_stats_std * 5)) if actual_stats_std > 0 else 100
             
             # Forma reciente (promedio de últimos 3 juegos)
-            recent_form = player_historical.tail(3)['rebounds'].mean() if len(player_historical) >= 3 else actual_stats_mean
+            if len(historical_reb) >= 3:
+                recent_form = historical_reb.tail(3).mean()
+            else:
+                recent_form = actual_stats_mean
             
             # CALCULAR ESTADÍSTICAS H2H DETALLADAS
             # Usar opponent_team del juego actual si está disponible, sino usar histórico
@@ -335,13 +367,19 @@ class TRBPredictor:
                 max_games=50
             )
             
-            # APLICAR FACTOR H2H A LA PREDICCIÓN
-            h2h_factor = h2h_stats.get('h2h_factor', 1.0)
-            if h2h_factor != 1.0 and h2h_stats.get('games_found', 0) >= 3:
+            # APLICAR FACTOR H2H A LA PREDICCIÓN (SOLO SI HAY DATOS SUFICIENTES)
+            h2h_factor = h2h_stats.get('h2h_factor', None)
+            h2h_games = h2h_stats.get('games_found', 0)
+            
+            if h2h_factor is not None and h2h_games >= 3:
+                # Si hay suficientes datos H2H, aplicar el factor
                 raw_prediction_adjusted = raw_prediction * h2h_factor
-                logger.info(f"🎯 Aplicando factor H2H {h2h_factor:.3f} a predicción TRB: {raw_prediction:.1f} -> {raw_prediction_adjusted:.1f}")
+                logger.info(f" Aplicando factor H2H {h2h_factor:.3f} a predicción TRB: {raw_prediction:.1f} -> {raw_prediction_adjusted:.1f} (basado en {h2h_games} juegos H2H)")
             else:
+                # Si no hay suficientes datos H2H, NO AJUSTAR (sin fallback a 1.0)
                 raw_prediction_adjusted = raw_prediction
+                if h2h_games < 3:
+                    logger.warning(f" No se aplica factor H2H: solo {h2h_games} juegos H2H encontrados (mínimo requerido: 3)")
             
             # Calcular confianza usando PlayersConfidence
             confidence_percentage = self.confidence_calculator.calculate_player_confidence(
@@ -363,7 +401,7 @@ class TRBPredictor:
             
             # REGLA DE CASAS DE APUESTAS: No inferir predicciones menores a 4 TRB
             if trb_prediction < 4:
-                logger.info(f"⚠️  Predicción {trb_prediction:.1f} TRB < 4, no se infiere (casas de apuestas manejan líneas ≥4)")
+                logger.info(f"  Predicción {trb_prediction:.1f} TRB < 4, no se infiere (casas de apuestas manejan líneas ≥4)")
                 return None
             
             return {
@@ -415,7 +453,7 @@ class TRBPredictor:
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en predicción: {e}")
+            logger.error(f" Error en predicción: {e}")
             import traceback
             traceback.print_exc()
             return {
@@ -441,52 +479,126 @@ def test_trb_predictor():
         else:
             return obj
     
-    print("🧪 PROBANDO TRB PREDICTOR")
-    print("="*50)
+    print("="*80)
+    print(" PROBANDO TRB PREDICTOR - KNICKS VS CAVALIERS")
+    print("="*80)
     
     # Inicializar predictor
     predictor = TRBPredictor()
     
     # Cargar datos y modelo
-    print("📂 Cargando datos y modelo...")
+    print("\n Cargando datos y modelo...")
     if not predictor.load_data_and_model():
-        print("❌ Error cargando modelo")
+        print(" Error cargando modelo")
         return False
     
-    # Prueba con datos simulados de SportRadar
-    print("\n🎯 Prueba con datos simulados de SportRadar:")
+    print("\n✅ Modelo cargado exitosamente")
     
-    # Simular datos de SportRadar
+    # Prueba con datos simulados de SportRadar
+    print("\n" + "="*80)
+    print(" PRUEBA: KNICKS VS CAVALIERS - REBOTES")
+    print("="*80)
+    
+    # Simular datos de SportRadar para Knicks vs Cavaliers
     mock_sportradar_game = {
-        "gameId": "sr:match:12345",
-        "scheduled": "2024-01-15T20:00:00Z",
+        "gameId": "sr:match:knicks_cavs_20250124",
+        "scheduled": "2025-01-24T19:30:00Z",
         "status": "scheduled",
         "homeTeam": {
-            "name": "Denver Nuggets",
-            "alias": "DEN",
+            "name": "New York Knicks",
+            "alias": "NYK",
             "players": [
                 {
-                    "playerId": "sr:player:123",
-                    "fullName": "Nikola Jokić",
+                    "playerId": "sr:player:brunson",
+                    "fullName": "Jalen Brunson",
+                    "position": "PG",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "11",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:towns",
+                    "fullName": "Karl-Anthony Towns",
                     "position": "C",
                     "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "15",
+                    "jerseyNumber": "32",
                     "injuries": []
                 },
                 {
-                    "playerId": "sr:player:124",
-                    "fullName": "Aaron Gordon",
-                    "position": "F",
+                    "playerId": "sr:player:anunoby",
+                    "fullName": "OG Anunoby",
+                    "position": "SF",
                     "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "50",
+                    "jerseyNumber": "8",
                     "injuries": []
                 },
                 {
-                    "playerId": "sr:player:125",
-                    "fullName": "Michael Porter Jr.",
-                    "position": "F",
+                    "playerId": "sr:player:hart",
+                    "fullName": "Josh Hart",
+                    "position": "SG",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "3",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:robinson",
+                    "fullName": "Mitchell Robinson",
+                    "position": "C",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "23",
+                    "injuries": []
+                }
+            ]
+        },
+        "awayTeam": {
+            "name": "Cleveland Cavaliers", 
+            "alias": "CLE",
+            "players": [
+                {
+                    "playerId": "sr:player:mitchell",
+                    "fullName": "Donovan Mitchell",
+                    "position": "SG",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "45",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:garland",
+                    "fullName": "Darius Garland",
+                    "position": "PG",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "10",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:mobley",
+                    "fullName": "Evan Mobley",
+                    "position": "PF",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "4",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:allen",
+                    "fullName": "Jarrett Allen",
+                    "position": "C",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "31",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:strus",
+                    "fullName": "Max Strus",
+                    "position": "SF",
                     "starter": True,
                     "status": "ACT",
                     "jerseyNumber": "1",
@@ -494,144 +606,54 @@ def test_trb_predictor():
                 }
             ]
         },
-        "awayTeam": {
-            "name": "Philadelphia 76ers", 
-            "alias": "PHI",
-            "players": [
-                {
-                    "playerId": "sr:player:456",
-                    "fullName": "Joel Embiid",
-                    "position": "C",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "21",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:457",
-                    "fullName": "Tyrese Maxey",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "0",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:458",
-                    "fullName": "Tobias Harris",
-                    "position": "F",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "12",
-                    "injuries": []
-                }
-            ]
-        },
         "venue": {
-            "name": "Ball Arena",
-            "capacity": 19520
+            "name": "Madison Square Garden",
+            "capacity": 19812
         }
     }
     
-    # Probar predicción desde SportRadar
-    print("   Prediciendo Nikola Jokić desde datos SportRadar:")
-    sportradar_result = predictor.predict_game(
-        mock_sportradar_game, 
-        "Nikola Jokić"
-    )
+    # Probar predicción para todos los jugadores del juego
+    print("\n📊 PREDICCIONES PARA TODOS LOS JUGADORES:\n")
     
-    if sportradar_result is not None and 'error' not in sportradar_result:
-        print("   ✅ Resultado SportRadar (formato JSON exacto):")
-        from app.utils.helpers import safe_json_dumps
-        print(safe_json_dumps(sportradar_result, indent=4))
-    elif sportradar_result is None:
-        print("      ⚠️ No se hizo predicción (jugador no disponible)")
-    else:
-        print(f"   ❌ Error: {sportradar_result['error']}")
-        if 'available_players' in sportradar_result:
-            print(f"   Jugadores disponibles: {sportradar_result['available_players']}")
+    from app.utils.helpers import safe_json_dumps
     
-    # Probar búsqueda inteligente con mejores reboteadores
-    print("\n🧠 Pruebas con mejores reboteadores:")
+    # Lista de todos los jugadores
+    all_players = []
+    for team_key in ['homeTeam', 'awayTeam']:
+        for player in mock_sportradar_game[team_key]['players']:
+            all_players.append(player['fullName'])
     
-    # Caso 1: Joel Embiid (Elite rebounder PHI)
-    print("   1. Elite rebounder visitante: 'Joel Embiid'")
-    embiid_result = predictor.predict_game(mock_sportradar_game, "Joel Embiid")
-    if embiid_result is not None and 'error' not in embiid_result:
-        print(f"      ✅ Encontrado: {embiid_result['target_name']} -> bet_line: {embiid_result['bet_line']}")
-        print("      📊 Predicción detallada de Embiid:")
-        from app.utils.helpers import safe_json_dumps
-        print(safe_json_dumps(embiid_result, indent=4))
-    elif embiid_result is None:
-        print(f"      ⚠️ Jugador no disponible para predicción")
-    else:
-        print(f"      ❌ Error: {embiid_result.get('error', 'Error desconocido')}")
+    print(f"Total jugadores a predecir: {len(all_players)}\n")
     
-    # Caso 2: Aaron Gordon (Solid rebounder DEN)
-    print("   2. Solid rebounder local: 'Aaron Gordon'")
-    gordon_result = predictor.predict_game(mock_sportradar_game, "Aaron Gordon")
-    if gordon_result is not None and 'error' not in gordon_result:
-        print(f"      ✅ Encontrado: {gordon_result['target_name']} -> bet_line: {gordon_result['bet_line']}")
-        print("      📊 Predicción detallada de Gordon:")
-        print(safe_json_dumps(gordon_result, indent=4))
-    elif gordon_result is None:
-        print(f"      ⚠️ Jugador no disponible para predicción")
-    else:
-        print(f"      ❌ Error: {gordon_result.get('error', 'Error desconocido')}")
+    successful_predictions = 0
+    failed_predictions = 0
     
-    # Caso 3: Búsqueda case-insensitive
-    print("   3. Búsqueda case-insensitive: 'nikola jokic'")
-    jokic_lower_result = predictor.predict_game(mock_sportradar_game, "nikola jokic")
-    if jokic_lower_result is not None and 'error' not in jokic_lower_result:
-        print(f"      ✅ Encontrado: {jokic_lower_result['target_name']} -> bet_line: {jokic_lower_result['bet_line']}")
-    elif jokic_lower_result is None:
-        print(f"      ⚠️ Jugador no disponible para predicción")
-    else:
-        print(f"      ❌ Error: {jokic_lower_result.get('error', 'Error desconocido')}")
+    for idx, player_name in enumerate(all_players, 1):
+        print(f"\n{idx}. {player_name}:")
+        print("-" * 60)
+        
+        result = predictor.predict_game(mock_sportradar_game, player_name)
+        
+        if result is not None and 'error' not in result:
+            successful_predictions += 1
+            print(f"   ✅ PREDICCIÓN EXITOSA")
+            print(safe_json_dumps(result, indent=2))
+        elif result is None:
+            failed_predictions += 1
+            print(f"   ❌ No se hizo predicción (< 4 rebotes o jugador no disponible)")
+        else:
+            failed_predictions += 1
+            print(f"   ❌ Error: {result.get('error', 'Error desconocido')}")
     
-    # Caso 4: Búsqueda parcial (solo apellido)
-    print("   4. Búsqueda parcial: 'Embiid'")
-    embiid_partial_result = predictor.predict_game(mock_sportradar_game, "Embiid")
-    if embiid_partial_result is not None and 'error' not in embiid_partial_result:
-        print(f"      ✅ Encontrado: {embiid_partial_result['target_name']} -> bet_line: {embiid_partial_result['bet_line']}")
-    elif embiid_partial_result is None:
-        print(f"      ⚠️ Jugador no disponible para predicción")
-    else:
-        print(f"      ❌ Error: {embiid_partial_result.get('error', 'Error desconocido')}")
-    
-    # Caso 5: Michael Porter Jr. (Forward con rebotes)
-    print("   5. Forward reboteador: 'Michael Porter Jr.'")
-    porter_result = predictor.predict_game(mock_sportradar_game, "Michael Porter Jr.")
-    if porter_result is not None and 'error' not in porter_result:
-        print(f"      ✅ Encontrado: {porter_result['target_name']} -> bet_line: {porter_result['bet_line']}")
-        print("      📊 Predicción detallada de Porter Jr.:")
-        print(safe_json_dumps(porter_result, indent=4))
-    elif porter_result is None:
-        print(f"      ⚠️ Jugador no disponible para predicción")
-    else:
-        print(f"      ❌ Error: {porter_result['error']}")
-    
-    # Caso 6: Tyrese Maxey (Guard - pocos rebotes)
-    print("   6. Guard con pocos rebotes: 'Tyrese Maxey'")
-    maxey_result = predictor.predict_game(mock_sportradar_game, "Tyrese Maxey")
-    if maxey_result is None:
-        print(f"      ✅ Comportamiento esperado: No se hizo predicción (< 4 rebotes)")
-    elif maxey_result is not None and 'error' not in maxey_result:
-        print(f"      ⚠️ Predicción hecha: {maxey_result['target_name']} -> bet_line: {maxey_result['bet_line']}")
-    else:
-        print(f"      ❌ Error: {maxey_result.get('error', 'Error desconocido')}")
-    
-    # Caso 7: Jugador no existente (para probar sugerencias)
-    print("   7. Jugador inexistente: 'Shaquille O'Neal'")
-    shaq_result = predictor.predict_game(mock_sportradar_game, "Shaquille O'Neal")
-    if shaq_result is not None and 'error' in shaq_result:
-        print(f"      ❌ Error esperado: {shaq_result['error']}")
-        if 'similar_suggestions' in shaq_result:
-            print(f"      💡 Sugerencias: {shaq_result['similar_suggestions']}")
-    elif shaq_result is None:
-        print(f"      ⚠️ Jugador no disponible para predicción")
-    else:
-        print(f"      ⚠️ Inesperado: {shaq_result}")
+    # Resumen
+    print("\n" + "="*80)
+    print(" RESUMEN DE PREDICCIONES")
+    print("="*80)
+    print(f"Total jugadores: {len(all_players)}")
+    print(f"✅ Predicciones exitosas: {successful_predictions}")
+    print(f"❌ Predicciones fallidas: {failed_predictions}")
+    print(f"📊 Tasa de éxito: {(successful_predictions/len(all_players)*100):.1f}%")
+    print("="*80)
     
     print("\n✅ Prueba completada")
     return True

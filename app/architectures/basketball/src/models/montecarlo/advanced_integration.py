@@ -422,7 +422,7 @@ class AdvancedMonteCarloIntegrator:
             }
             
             self.models_loaded = True
-            self.logger.info("🎯 Sistema de modelos especializados LISTO (lazy loading)")
+            self.logger.info(" Sistema de modelos especializados LISTO (lazy loading)")
             self.logger.info(f"Modelos disponibles: {len(self.available_models)}")
             
         except Exception as e:
@@ -448,7 +448,7 @@ class AdvancedMonteCarloIntegrator:
             self.specialized_models[model_name] = model_instance
             self.available_models[model_name]['loaded'] = True
             
-            self.logger.info(f"✅ Modelo {model_name} cargado dinámicamente")
+            self.logger.info(f" Modelo {model_name} cargado dinámicamente")
             return model_instance
             
         except Exception as e:

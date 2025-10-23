@@ -11,6 +11,7 @@ pandas
 python-dateutil
 pydantic
 seaborn
+redis
 
 # Machine Learning y Deep Learning (IA)
 scikit-learn
@@ -27,17 +28,12 @@ matplotlib
 seaborn
 plotly
 
-# Jupyter y notebooks
-jupyter
-ipywidgets
-nbformat
-kaleido
-
 # Utilidades y herramientas
 tqdm
 joblib
 requests
 python-dotenv
+
 
 # Graph Neural Networks (Deep Learning - IA )(Opcional - Futuro)
 # Implementado en app\architectures\basketball\src\models\players\ast\dl_ast

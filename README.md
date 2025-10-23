@@ -12,12 +12,12 @@ Este proyecto implementa una API REST moderna para servir modelos de inteligenci
 
 ### Características
 
-- ✅ Arquitectura modular y escalable
-- ✅ Validación de datos con Pydantic
-- ✅ Documentación OpenAPI automática
-- ✅ Sistema de logging centralizado
-- ✅ Manejo de excepciones global
-- ✅ Carga automática de módulos (routers)
+-  Arquitectura modular y escalable
+-  Validación de datos con Pydantic
+-  Documentación OpenAPI automática
+-  Sistema de logging centralizado
+-  Manejo de excepciones global
+-  Carga automática de módulos (routers)
 
 ## Requisitos
 

@@ -112,8 +112,7 @@ class DoubleDoubleTrainer:
         )
         
         # Cargar datasets para pasarlos al modelo Double-Double
-        players_data, teams_data = self.data_loader.load_data(use_quarters=False)
-        players_quarters, _ = self.data_loader.load_data(use_quarters=True)
+        players_data, teams_data, players_quarters, teams_quarters = self.data_loader.load_data()
         
         self.model = DoubleDoubleModel(
             optimize_hyperparams=False,  # Desactivar temporalmente para evitar error de índices
@@ -140,12 +139,12 @@ class DoubleDoubleTrainer:
         """
         
         # Cargar datos usando el data loader
-        self.df, self.teams_df = self.data_loader.load_data()
+        self.df, self.teams_df, players_quarters, teams_quarters = self.data_loader.load_data()
         
         # Verificar/Crear columna double_double
         if 'double_double' not in self.df.columns:
-            # Crear double_double basado en PTS, TRB, AST, STL, BLK
-            stats_cols = ['PTS', 'TRB', 'AST', 'STL', 'BLK']
+            # Crear double_double basado en points, TRB, AST, STL, BLK
+            stats_cols = ['points', 'TRB', 'AST', 'STL', 'BLK']
             available_stats = [col for col in stats_cols if col in self.df.columns]
             
             if len(available_stats) >= 2:
@@ -167,7 +166,7 @@ class DoubleDoubleTrainer:
         logger.info("Estadísticas del dataset:")
         logger.info(f"   • Registros de jugadores: {len(self.df):,}")
         logger.info(f"   • Registros de equipos: {len(self.teams_df):,}")
-        logger.info(f"   • Jugadores únicos: {self.df['Player'].nunique():,}")
+        logger.info(f"   • Jugadores únicos: {self.df['player'].nunique():,}")
         logger.info(f"   • Equipos únicos: {self.df['Team'].nunique():,}")
         logger.info(f"   • Rango temporal: {self.df['Date'].min()} a {self.df['Date'].max()}")
         
@@ -751,11 +750,11 @@ THRESHOLD OPTIMIZADO:
     def _plot_top_dd_players_compact(self, ax):
         """Análisis compacto de top jugadores DD."""
         # Obtener top jugadores por tasa de DD
-        player_stats = self.df.groupby('Player').agg({
+        player_stats = self.df.groupby('player').agg({
             'double_double': ['mean', 'count']
         }).reset_index()
         
-        player_stats.columns = ['Player', 'dd_rate', 'count']
+        player_stats.columns = ['player', 'dd_rate', 'count']
         
         # Filtrar jugadores con al menos 10 juegos
         player_stats = player_stats[player_stats['count'] >= 10]
@@ -764,7 +763,7 @@ THRESHOLD OPTIMIZADO:
         top_players = player_stats.nlargest(10, 'dd_rate')
         
         if len(top_players) > 0:
-            players = [p[:15] + '' if len(p) > 15 else p for p in top_players['Player']]
+            players = [p[:15] + '' if len(p) > 15 else p for p in top_players['player']]
             rates = top_players['dd_rate']
             
             bars = ax.barh(players, rates, alpha=0.8, color='lightsteelblue')
@@ -838,7 +837,7 @@ THRESHOLD OPTIMIZADO:
         
         # Guardar predicciones
         if self.predictions is not None:
-            predictions_df = self.df[['Player', 'Date', 'double_double']].copy()
+            predictions_df = self.df[['player', 'Date', 'double_double']].copy()
             predictions_df['Predicted_DD'] = self.predictions
             if self.prediction_probabilities is not None:
                 predictions_df['DD_Probability'] = self.prediction_probabilities
@@ -848,7 +847,7 @@ THRESHOLD OPTIMIZADO:
             predictions_df.to_csv(predictions_path, index=False)
             print(f"Predicciones guardadas: {predictions_path}")
         
-        # Guardar feature importance COMPLETA (todas las features como en PTS)
+        # Guardar feature importance COMPLETA (todas las features como en points)
         try:
             feature_importance = self.model.get_feature_importance()  # SIN LÍMITE para exportar TODAS
             if feature_importance:
@@ -872,7 +871,7 @@ THRESHOLD OPTIMIZADO:
                             for k, v in feature_importance.items()
                         ])
                     
-                    # Ordenar y agregar información adicional (como en PTS)
+                    # Ordenar y agregar información adicional (como en points)
                     importance_df = importance_df.sort_values('importance', ascending=False)
                     total_features = len(importance_df)
                     importance_df['rank'] = range(1, total_features + 1)
@@ -949,7 +948,7 @@ THRESHOLD OPTIMIZADO:
                     if stacking_cv.get('overfitting_detected', False):
                         print(f"OVERFITTING DETECTADO - Gap: {stacking_cv.get('overfitting_gap', 0):.4f}")
                     else:
-                        print(f"✅ Sin overfitting detectado - Gap: {stacking_cv.get('overfitting_gap', 0):.4f}")
+                        print(f" Sin overfitting detectado - Gap: {stacking_cv.get('overfitting_gap', 0):.4f}")
                     
                     print(f"Estabilidad del modelo: {stacking_cv.get('stability_score', 0):.4f}")
                     print("=" * 60)

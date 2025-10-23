@@ -15,14 +15,14 @@ Características principales:
 """
 
 from .sportradar_api import SportradarAPI
-from .bookmakers_data_fetcher import BookmakersDataFetcher
-from .bookmakers_integration import BookmakersIntegration
-from .config.config import BookmakersConfig
+from .betting_analytics import BettingAnalytics, get_analytics_engine, FilteredPrediction
+from .config.config import get_config
 from .config.exceptions import (
-    BookmakersAPIError,
     SportradarAPIError,
-    InsufficientDataError,
-    ConfigurationError
+    AuthenticationError,
+    RateLimitError,
+    NetworkError,
+    DataValidationError
 )
 
 __version__ = "1.0.0"
@@ -31,17 +31,19 @@ __author__ = "NBA Prediction System"
 __all__ = [
     # APIs principales
     'SportradarAPI',
-    'BookmakersDataFetcher', 
-    'BookmakersIntegration',
+    'BettingAnalytics',
+    'get_analytics_engine',
+    'FilteredPrediction',
     
     # Configuración
-    'BookmakersConfig',
+    'get_config',
     
     # Excepciones
-    'BookmakersAPIError',
     'SportradarAPIError',
-    'InsufficientDataError',
-    'ConfigurationError',
+    'AuthenticationError',
+    'RateLimitError',
+    'NetworkError',
+    'DataValidationError',
     
     # Metadatos
     '__version__',

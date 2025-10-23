@@ -52,11 +52,11 @@ class GameDataAdapter:
             # Convertir datos de equipos
             teams_df = self._convert_teams_data(game_data, game_info)
             
-            logger.info(f"✅ Conversión completada: {len(players_df)} jugadores, {len(teams_df)} equipos")
+            logger.info(f" Conversión completada: {len(players_df)} jugadores, {len(teams_df)} equipos")
             return players_df, teams_df
             
         except Exception as e:
-            logger.error(f"❌ Error convirtiendo datos del juego: {e}")
+            logger.error(f" Error convirtiendo datos del juego: {e}")
             import traceback
             traceback.print_exc()
             raise

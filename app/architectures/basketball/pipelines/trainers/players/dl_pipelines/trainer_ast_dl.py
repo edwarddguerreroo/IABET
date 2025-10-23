@@ -29,10 +29,6 @@ from typing import Dict, List, Tuple
 # Agregar el directorio raíz al PYTHONPATH para resolver las importaciones
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', '..')))
 
-# Configurar logging
-from app.architectures.basketball.config.logging_config import NBALogger
-logger = NBALogger.get_logger(__name__)
-
 # Imports de Deep Learning
 from app.architectures.basketball.src.models.players.ast.dl_ast.config import (
     DLConfig, TransformerConfig, LSTMConfig, GNNConfig, 
@@ -42,6 +38,7 @@ from app.architectures.basketball.src.models.players.ast.dl_ast.trainer import D
 from app.architectures.basketball.src.preprocessing.data_loader import NBADataLoader
 from app.architectures.basketball.src.models.players.ast.features_ast import AssistsFeatureEngineer
 
+logger = logging.getLogger(__name__)
 
 class ASTDeepLearningPipeline:
     """
@@ -127,7 +124,7 @@ class ASTDeepLearningPipeline:
         
         # Cargar datos
         data_loader = NBADataLoader(players_total_path, players_quarters_path, teams_total_path, teams_quarters_path, biometrics_path)
-        df, teams_df = data_loader.load_data()
+        df, teams_df, players_quarters, teams_quarters = data_loader.load_data()
         
         logger.info(f"Datos cargados: {len(df)} registros")
         logger.info(f"Datos de equipos: {len(teams_df)} registros")
@@ -239,7 +236,7 @@ class ASTDeepLearningPipeline:
     
     def train_ensemble_models(self, df: pd.DataFrame) -> Dict:
         """Entrena modelos Ensemble especializados."""
-        logger.info("🎯 ENTRENANDO MODELOS ENSEMBLE ESPECIALIZADOS")
+        logger.info(" ENTRENANDO MODELOS ENSEMBLE ESPECIALIZADOS")
         
         config = self.dl_config.ensemble
         ensemble_results = {}
@@ -258,7 +255,7 @@ class ASTDeepLearningPipeline:
     
     def train_hybrid_models(self, df: pd.DataFrame) -> Dict:
         """Entrena modelos híbridos avanzados."""
-        logger.info("🚀 ENTRENANDO MODELOS HÍBRIDOS AVANZADOS")
+        logger.info(" ENTRENANDO MODELOS HÍBRIDOS AVANZADOS")
         
         config = self.dl_config.hybrid
         hybrid_results = {}
@@ -283,7 +280,7 @@ class ASTDeepLearningPipeline:
     def run_complete_pipeline(self):
         """Ejecuta el pipeline completo de entrenamiento."""
         logger.info("=" * 80)
-        logger.info("🚀 INICIANDO PIPELINE COMPLETO DE DEEP LEARNING AST")
+        logger.info(" INICIANDO PIPELINE COMPLETO DE DEEP LEARNING AST")
         logger.info("=" * 80)
         
         start_time = time.time()
@@ -305,10 +302,10 @@ class ASTDeepLearningPipeline:
             logger.info("\n🎭 FASE 4: MODELOS VAE")
             self.model_results['vae'] = self.train_vae_models(df)
             
-            logger.info("\n🎯 FASE 5: MODELOS ENSEMBLE")
+            logger.info("\n FASE 5: MODELOS ENSEMBLE")
             self.model_results['ensemble'] = self.train_ensemble_models(df)
             
-            logger.info("\n🚀 FASE 6: MODELOS HÍBRIDOS")
+            logger.info("\n FASE 6: MODELOS HÍBRIDOS")
             self.model_results['hybrid'] = self.train_hybrid_models(df)
             
             # 3. Generar reporte final
@@ -322,7 +319,7 @@ class ASTDeepLearningPipeline:
     def generate_final_report(self, total_time: float):
         """Genera reporte final con todos los resultados."""
         logger.info("=" * 80)
-        logger.info("📊 GENERANDO REPORTE FINAL")
+        logger.info(" GENERANDO REPORTE FINAL")
         logger.info("=" * 80)
         
         # Encontrar mejor modelo

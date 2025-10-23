@@ -139,10 +139,7 @@ class XGBoostTRBTrainer:
         """
         
         # Cargar datos usando el data loader (UNA SOLA VEZ)
-        self.df, self.teams_df = self.data_loader.load_data(use_quarters=False)
-        
-        # Cargar datos por cuartos para el modelo
-        players_quarters, _ = self.data_loader.load_data(use_quarters=True)
+        self.df, self.teams_df, players_quarters, teams_quarters = self.data_loader.load_data()
         
         # ASIGNAR DATOS AL MODELO
         self.model.stacking_model.teams_df = self.teams_df
@@ -926,7 +923,7 @@ MODELOS BASE:
             importance_path = os.path.normpath(os.path.join(self.output_dir, 'feature_importance.csv'))
             importance_df.to_csv(importance_path, index=False)
             
-            logger.info(f"✅ Feature importance exportada: {total_features} features completas en {importance_path}")
+            logger.info(f" Feature importance exportada: {total_features} features completas en {importance_path}")
         
         # Crear resumen de archivos generados
         files_summary = {

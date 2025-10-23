@@ -206,15 +206,15 @@ class StackingTRBModel:
             split_idx = int(len(df) * (1 - test_size))
             return df.iloc[:split_idx].copy(), df.iloc[split_idx:].copy()
         
-        # Ordenar por fecha
-        df_sorted = df.sort_values('Date').reset_index(drop=True)
+        # Ordenar por fecha y jugador para consistencia
+        df_sorted = df.sort_values(['Date', 'player']).reset_index(drop=True)
         
         # Encontrar punto de corte temporal
         split_idx = int(len(df_sorted) * (1 - test_size))
         cutoff_date = df_sorted.iloc[split_idx]['Date']
         
-        train_data = df_sorted[df_sorted['Date'] < cutoff_date].copy()
-        test_data = df_sorted[df_sorted['Date'] >= cutoff_date].copy()
+        train_data = df_sorted[df_sorted['Date'] < cutoff_date].copy().reset_index(drop=True)
+        test_data = df_sorted[df_sorted['Date'] >= cutoff_date].copy().reset_index(drop=True)
         
         logger.info(f"División temporal: {len(train_data)} entrenamiento, {len(test_data)} prueba")
         logger.info(f"Fecha corte: {cutoff_date}")
@@ -347,17 +347,17 @@ class StackingTRBModel:
             if not df['Date'].is_monotonic_increasing:
                 logger.info("Ordenando datos cronológicamente...")
                 df = df.sort_values(['player', 'Date']).reset_index(drop=True)
-        
+
         # Generar features especializadas para rebotes
         logger.info("Generando características especializadas...")
-        features = self.feature_engineer.generate_all_features(df)  # Modificar DataFrame directamente
+        features = self.feature_engineer.generate_all_features(df)  # Usar datos filtrados
         
         if not features:
             raise ValueError("No se pudieron generar features para TRB")
         
         logger.info(f"Features seleccionadas: {len(features)}")
 
-        # Preparar datos (ahora df tiene las features)
+        # Preparar datos (ahora df_clean tiene las features)
         X = df[features].fillna(0)
         y = df['rebounds']
         
@@ -702,7 +702,7 @@ class StackingTRBModel:
         """
         if not hasattr(self, 'trained_base_models') or not hasattr(self, 'meta_learner'):
             raise ValueError("Modelo no entrenado. Ejecutar train() primero.")
-        
+
         # Generar features (modificar DataFrame directamente)
         features = self.feature_engineer.generate_all_features(df)
         
@@ -882,7 +882,7 @@ class StackingTRBModel:
                 n_jobs=1,
                 passthrough=True
             )
-            logger.info("✅ StackingRegressor creado para compatibilidad con predictor TRB")
+            logger.info(" StackingRegressor creado para compatibilidad con predictor TRB")
 
 class XGBoostTRBModel (StackingTRBModel):
     """

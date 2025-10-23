@@ -22,13 +22,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 from app.architectures.basketball.src.preprocessing.data_loader import NBADataLoader
 from app.architectures.basketball.src.models.montecarlo import MonteCarloEngine, ProbabilityCalculator
 from app.architectures.basketball.src.models.montecarlo.simulator import NBAGameSimulator
-from app.architectures.basketball.config.logging_config import configure_model_logging
 from app.architectures.basketball.src.models.montecarlo.correlations import NBACorrelationMatrix
 from app.architectures.basketball.src.models.montecarlo.config import MASTER_CONFIG, get_target_players, is_target_player, get_target_player_line
 
 # Configurar logging
-logger = configure_model_logging("montecarlo_pipeline")
-
+logger = logging.getLogger(__name__)
 
 class MonteCarloNBAPipeline:
     """Pipeline principal del sistema Monte Carlo NBA con máxima precisión"""
@@ -127,7 +125,7 @@ class MonteCarloNBAPipeline:
             )
             
             self.use_enhanced_mode = True
-            self.logger.info("🚀 Motor MEJORADO y Simulador AVANZADO activados")
+            self.logger.info(" Motor MEJORADO y Simulador AVANZADO activados")
             
         except Exception as e:
             self.logger.warning(f"No se pudo cargar motor mejorado: {e}")
@@ -139,7 +137,7 @@ class MonteCarloNBAPipeline:
             self.validator = MultiDimensionalValidator()
             self.ensemble_integrator = EnsembleIntegrator()
             self.validation_enabled = True
-            self.logger.info("🎯 Sistema de Validación Multi-Dimensional ACTIVADO")
+            self.logger.info(" Sistema de Validación Multi-Dimensional ACTIVADO")
         except Exception as e:
             self.logger.warning(f"Sistema de validación no disponible: {e}")
             self.validation_enabled = False
@@ -205,7 +203,7 @@ class MonteCarloNBAPipeline:
                         away_team=away_team,
                         date=date
                     )
-                    self.logger.info(f"🎯 Simulación MEJORADA completada para {game_key}")
+                    self.logger.info(f" Simulación MEJORADA completada para {game_key}")
                     
                     # APLICAR ENSEMBLE INTEGRATION SI ESTÁ DISPONIBLE
                     if self.precision_config['enable_ensemble'] and hasattr(self, 'ensemble_integrator'):
@@ -520,7 +518,7 @@ class MonteCarloNBAPipeline:
                     if isinstance(player_simulations_data, list) and len(player_simulations_data) > 0:
                         # Calcular promedios de las simulaciones
                         avg_stats = {}
-                        for stat in ['PTS', 'TRB', 'AST', 'STL', 'BLK', '3P']:
+                        for stat in ['points', 'TRB', 'AST', 'STL', 'BLK', '3P']:
                             stat_values = [sim.get(stat, 0) for sim in player_simulations_data if isinstance(sim, dict)]
                             if stat_values:
                                 avg_stats[stat] = sum(stat_values) / len(stat_values)
@@ -572,7 +570,7 @@ class MonteCarloNBAPipeline:
         recommendations = []
         
         # Estadísticas principales para analizar
-        key_stats = ['PTS', 'TRB', 'AST', 'STL', 'BLK', '3P']
+        key_stats = ['points', 'TRB', 'AST', 'STL', 'BLK', '3P']
         
         for stat in key_stats:
             if stat in player_stats and player_stats[stat] > 0:
@@ -618,7 +616,7 @@ class MonteCarloNBAPipeline:
         """
         # Factores de ajuste para diferentes estadísticas
         adjustment_factors = {
-            'PTS': 0.90,   # Línea 10% por debajo de predicción
+            'points': 0.90,   # Línea 10% por debajo de predicción
             'TRB': 0.85,   # Línea 15% por debajo
             'AST': 0.80,   # Línea 20% por debajo
             'STL': 0.75,   # Línea 25% por debajo
@@ -628,7 +626,7 @@ class MonteCarloNBAPipeline:
         
         # Líneas mínimas por estadística
         min_lines = {
-            'PTS': 0.5,
+            'points': 0.5,
             'TRB': 0.5,
             'AST': 0.5,
             'STL': 0.5,
@@ -654,7 +652,7 @@ class MonteCarloNBAPipeline:
         """
         # Umbrales por estadística (basados en variabilidad típica)
         confidence_thresholds = {
-            'PTS': {'high': 3.0, 'medium': 1.5},
+            'points': {'high': 3.0, 'medium': 1.5},
             'TRB': {'high': 2.0, 'medium': 1.0},
             'AST': {'high': 1.5, 'medium': 0.8},
             'STL': {'high': 0.5, 'medium': 0.3},
@@ -986,7 +984,7 @@ class MonteCarloNBAPipeline:
                 away_sims = pd.DataFrame(away_sims)
             
             # Correlaciones principales
-            main_stats = ['PTS', 'TRB', 'AST']
+            main_stats = ['points', 'TRB', 'AST']
             
             if isinstance(home_sims, pd.DataFrame) and isinstance(away_sims, pd.DataFrame):
                 available_stats = [stat for stat in main_stats if stat in home_sims.columns]
@@ -1445,12 +1443,12 @@ class MonteCarloNBAPipeline:
                 return {}
             
             # Calcular promedios
-            home_avg_pts = home_games['PTS'].mean()
-            away_avg_pts = away_games['PTS'].mean()
+            home_avg_points = home_games['points'].mean()
+            away_avg_points = away_games['points'].mean()
             
             # Ajustar por ventaja local
-            home_predicted = home_avg_pts * 1.03  # 3% ventaja local
-            away_predicted = away_avg_pts * 0.99  # 1% desventaja visitante
+            home_predicted = home_avg_points * 1.03  # 3% ventaja local
+            away_predicted = away_avg_points * 0.99  # 1% desventaja visitante
             
             # Calcular probabilidad de victoria
             score_diff = home_predicted - away_predicted

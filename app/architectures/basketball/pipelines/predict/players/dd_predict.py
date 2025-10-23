@@ -96,42 +96,33 @@ class DoubleDoublePredictor:
                 teams_quarters_path="app/architectures/basketball/data/teams_quarters.csv",
                 biometrics_path="app/architectures/basketball/data/biometrics.csv"
             )
-            self.historical_players, self.historical_teams = data_loader.load_data()
+            self.historical_players, self.historical_teams, self.historical_players_quarters, self.historical_teams_quarters = data_loader.load_data()
             
             # Inicializar modelo Double Double avanzado
-            logger.info("🤖 Inicializando modelo Double Double avanzado...")
+            logger.info(" Inicializando modelo Double Double avanzado...")
             self.model = DoubleDoubleModel(
                 optimize_hyperparams=False  # Para carga rápida
             )
             
             # Cargar modelo entrenado
             model_path = "app/architectures/basketball/.joblib/dd_model.joblib"
-            logger.info(f"📦 Cargando modelo desde: {model_path}")
+            logger.info(f" Cargando modelo desde: {model_path}")
             
             # Verificar si el archivo existe
             if not os.path.exists(model_path):
-                logger.error(f"❌ Archivo de modelo no encontrado: {model_path}")
-                logger.warning("⚠️ AVISO: El modelo necesita ser reentrenado")
+                logger.error(f" Archivo de modelo no encontrado: {model_path}")
+                logger.warning(" AVISO: El modelo necesita ser reentrenado")
                 return False
             
 
             # Primero intentar cargar como DoubleDoubleModel completo (nuevo formato)
             self.model = DoubleDoubleModel.load_model(model_path)
-            logger.info("✅ Modelo cargado en formato nuevo (objeto completo)")
+            logger.info(" Modelo cargado en formato nuevo (objeto completo)")
                 
-            
-            # DEBUG: Verificar estado final del modelo
-            logger.info(f"🔍 DEBUG Estado final del modelo:")
-            logger.info(f"   Tipo: {type(self.model)}")
-            logger.info(f"   is_fitted: {getattr(self.model, 'is_fitted', 'N/A')}")
-            logger.info(f"   tiene stacking_model: {hasattr(self.model, 'stacking_model') and self.model.stacking_model is not None}")
-            logger.info(f"   tiene scaler: {hasattr(self.model, 'scaler')}")
-            logger.info(f"   tiene feature_engineer: {hasattr(self.model, 'feature_engineer')}")
-            
             self.is_loaded = True
             
             # Mostrar información del modelo
-            logger.info("📊 Información del modelo Double Double:")
+            logger.info(" Información del modelo Double Double:")
             if hasattr(self.model, 'training_results'):
                 logger.info(f"   Features utilizadas: {len(self.model.feature_importance) if hasattr(self.model, 'feature_importance') else 'N/A'}")
                 if 'optimal_threshold' in self.model.training_results:
@@ -140,7 +131,7 @@ class DoubleDoublePredictor:
             return True
             
         except Exception as e:
-            logger.error(f"❌ Error cargando datos y modelo: {e}")
+            logger.error(f" Error cargando datos y modelo: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -183,7 +174,7 @@ class DoubleDoublePredictor:
             available_players = self.confidence_calculator.filter_available_players_from_roster(game_data)
             
             if target_player not in available_players:
-                logger.info(f"❌ {target_player} no disponible en el roster")
+                logger.info(f" {target_player} no disponible en el roster")
                 return None
      
             # Extraer información adicional desde SportRadar
@@ -206,9 +197,9 @@ class DoubleDoublePredictor:
                 opponent_team = home_team_abbr
                 opponent_team_id = game_data.get('homeTeam', {}).get('teamId', '')
             else:
-                # Fallback a datos históricos si no coincide
-                opponent_team = player_data.get('Opp', 'Unknown')
-                opponent_team_id = ''
+                error_msg = f"No se pudo determinar el oponente para {target_player}: equipo actual {current_team_abbr} no coincide con home ({home_team_abbr}) ni away ({away_team_abbr})"
+                logger.error(f" {error_msg}")
+                return None
             
             # Agregar información extraída al player_data
             player_data['is_home'] = is_home
@@ -230,7 +221,7 @@ class DoubleDoublePredictor:
             
             # 🚨 SOLO DEVOLVER PREDICCIONES PARA JUGADORES QUE HARÁN DD
             if prediction_result is None:
-                logger.info(f"❌ No se predice double double para {target_player}")
+                logger.info(f" No se predice double double para {target_player}")
                 return None
             
             if 'error' in prediction_result:
@@ -257,7 +248,7 @@ class DoubleDoublePredictor:
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en predicción desde SportRadar: {e}")
+            logger.error(f" Error en predicción desde SportRadar: {e}")
             return {'error': f'Error procesando datos de SportRadar: {str(e)}'}
     
     def predict_single_player(self, player_data: Dict[str, Any], game_data: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -283,88 +274,72 @@ class DoubleDoublePredictor:
             # Usar búsqueda inteligente para encontrar el jugador en datos históricos
             player_historical = self.common_utils._smart_player_search(self.historical_players, player_name)
             
-            # Intentar usar datos del equipo actual primero, si no hay suficientes usar historial completo
+            if len(player_historical) == 0:
+                error_msg = f"No se encontraron datos históricos para {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            logger.info(f" Encontrados {len(player_historical)} registros históricos para {player_name}")
+            
+            # Verificar mínimo de datos requerido
+            if len(player_historical) < 10:
+                error_msg = f"Datos insuficientes para {player_name}: solo {len(player_historical)} juegos (mínimo requerido: 10 para DD)"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            # Usar datos del equipo actual SIEMPRE que sea posible
             if current_team != 'Unknown' and 'Team' in player_historical.columns:
-                logger.info(f"🏀 Filtrando datos por equipo actual: {current_team}")
+                logger.info(f" Filtrando datos por equipo actual: {current_team}")
                 
                 # Buscar datos del equipo actual
-                current_team_data = player_historical[
-                    player_historical['Team'] == current_team
-                ].copy()
+                current_team_data = player_historical[player_historical['Team'] == current_team].copy()
                 
-                # Si hay suficientes datos del equipo actual (mínimo 5 juegos), usarlos
-                if len(current_team_data) >= 5:
-                    logger.info(f"✅ Usando {len(current_team_data)} juegos del equipo actual ({current_team})")
+                # Si hay suficientes datos del equipo actual (mínimo 10 juegos para DD), usarlos
+                if len(current_team_data) >= 10:
+                    logger.info(f" Usando {len(current_team_data)} juegos del equipo actual ({current_team})")
                     player_historical = current_team_data
                 else:
-                    # Si no hay suficientes datos del equipo actual, usar TODOS los datos históricos
-                    logger.info(f"📅 Pocos datos de {current_team} ({len(current_team_data)} juegos), usando TODOS los {len(player_historical)} registros históricos para {player_name}")
+                    error_msg = f"Datos insuficientes del equipo actual {current_team} para {player_name}: solo {len(current_team_data)} juegos (mínimo requerido: 10)"
+                    logger.error(f" {error_msg}")
+                    return {'error': error_msg}
             else:
-                logger.info(f"🏀 Usando TODOS los {len(player_historical)} registros históricos para {player_name} (sin filtro por equipo)")
-            
-            if len(player_historical) == 0:
-                logger.warning(f"⚠️ No se encontraron datos históricos para {player_name}")
-                return {
-                    'error': f'No hay datos históricos suficientes para {player_name}',
-                    'dd_prediction': 0,
-                    'confidence_percentage': 0.0
-                }
-            else:
-                logger.info(f"✅ Encontrados {len(player_historical)} registros históricos para {player_name}")
+                logger.info(f" Usando TODOS los {len(player_historical)} registros históricos para {player_name}")
             
             # Tomar una muestra representativa para predicción (últimos 30 juegos)
             recent_data = player_historical.tail(30).copy()
             
-            # DEBUG: Analizar el estado del modelo y los datos
-            logger.info(f"🔍 DEBUG - Análisis de datos para {player_name}:")
-            logger.info(f"   📊 Shape de recent_data: {recent_data.shape}")
-            logger.info(f"   📋 Columnas disponibles: {list(recent_data.columns)}")
-            logger.info(f"   🔧 Modelo cargado: {type(self.model).__name__}")
-            logger.info(f"   ⚙️ Tiene stacking_model: {hasattr(self.model, 'stacking_model')}")
-            
             if hasattr(self.model, 'feature_engineer'):
-                logger.info(f"   🛠️ Tiene feature_engineer: {type(self.model.feature_engineer).__name__}")
+                logger.info(f"    Tiene feature_engineer: {type(self.model.feature_engineer).__name__}")
             
             # DEBUG: Intentar generar features paso a paso
             try:
-                logger.info("🧪 Intentando generar features paso a paso...")
+                logger.info(" Intentando generar features paso a paso...")
                 
                 # Verificar si el modelo tiene feature_engineer
                 if hasattr(self.model, 'feature_engineer') and self.model.feature_engineer is not None:
-                    logger.info("✅ Feature engineer encontrado, generando features...")
-                    
-                    # DEBUG: Verificar el estado de recent_data antes de features
-                    logger.info(f"   📊 Datos antes de features - Shape: {recent_data.shape}")
-                    logger.info(f"   📋 Primeras columnas: {list(recent_data.columns[:10])}")
-                    logger.info(f"   💾 Memoria usada: {recent_data.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
-                    
+                    logger.info(" Feature engineer encontrado, generando features...")
+
                     # Intentar generar features especializadas
                     try:
                         specialized_features = self.model.feature_engineer.generate_all_features(recent_data.copy())
                         
                         # DEBUG: Verificar tipo de retorno
                         if isinstance(specialized_features, list):
-                            logger.info(f"✅ Features especializadas generadas: {len(specialized_features)} (lista)")
+                            logger.info(f" Features especializadas generadas: {len(specialized_features)} (lista)")
                         elif isinstance(specialized_features, dict):
-                            logger.info(f"✅ Features especializadas generadas: {len(specialized_features)} (dict)")
-                            logger.info(f"   📝 Features generadas: {list(specialized_features.keys())[:10]}")
+                            logger.info(f" Features especializadas generadas: {len(specialized_features)} (dict)")
+                            logger.info(f"    Features generadas: {list(specialized_features.keys())[:10]}")
                         else:
-                            logger.info(f"✅ Features especializadas generadas: {type(specialized_features)}")
-                        
-                        # DEBUG ADICIONAL: Verificar estado del modelo antes de predicción
-                        logger.info(f"🔍 Estado del modelo antes de predicción:")
-                        logger.info(f"   is_fitted: {self.model.is_fitted}")
-                        logger.info(f"   tiene stacking_model: {hasattr(self.model, 'stacking_model') and self.model.stacking_model is not None}")
-                        logger.info(f"   tiene scaler: {hasattr(self.model, 'scaler')}")
+                            logger.info(f" Features especializadas generadas: {type(specialized_features)}")
                         
                         # Ahora intentar la predicción
                         probabilities = self.model.predict_proba(recent_data)
                         predictions = self.model.predict(recent_data)
-                        logger.info("✅ Predicción exitosa!")
+                        logger.info(" Predicción exitosa!")
                         
                     except Exception as feature_error:
-                        logger.error(f"❌ Error generando features: {feature_error}")
-                        logger.error(f"   🔍 Tipo de error: {type(feature_error).__name__}")
+                        logger.error(f" Error generando features: {feature_error}")
+                        logger.error(f"    Tipo de error: {type(feature_error).__name__}")
                         
                         # Si es el error específico de Series comparison, intentar arreglo
                         if "Can only compare identically-labeled Series objects" in str(feature_error):
@@ -372,19 +347,19 @@ class DoubleDoublePredictor:
                             try:
                                 # Resetear índices para alinear las Series
                                 recent_data_fixed = recent_data.copy().reset_index(drop=True)
-                                logger.info(f"📊 DataFrame reindexado: {recent_data_fixed.shape}")
+                                logger.info(f" DataFrame reindexado: {recent_data_fixed.shape}")
                                 
                                 # Intentar nuevamente con datos reindexados
                                 specialized_features = self.model.feature_engineer.generate_all_features(recent_data_fixed)
                                 probabilities = self.model.predict_proba(recent_data_fixed)
                                 predictions = self.model.predict(recent_data_fixed)
-                                logger.info("✅ Predicción exitosa con fix de índices!")
+                                logger.info(" Predicción exitosa con fix de índices!")
                                 
                             except Exception as fix_error:
-                                logger.error(f"❌ Fix de índices falló: {fix_error}")
+                                logger.error(f" Fix de índices falló: {fix_error}")
                                 # DEBUG: Información detallada del error original
                                 import traceback
-                                logger.error(f"   📜 Traceback del error original:")
+                                logger.error(f"    Traceback del error original:")
                                 for line in traceback.format_exc().split('\n'):
                                     if line.strip():
                                         logger.error(f"      {line}")
@@ -392,110 +367,148 @@ class DoubleDoublePredictor:
                         else:
                             # DEBUG: Información detallada del error
                             import traceback
-                            logger.error(f"   📜 Traceback completo:")
+                            logger.error(f"    Traceback completo:")
                             for line in traceback.format_exc().split('\n'):
                                 if line.strip():
                                     logger.error(f"      {line}")
                             
                             # Intentar enfoque alternativo más simple
-                            logger.info("🔄 Intentando enfoque alternativo...")
+                            logger.info(" Intentando enfoque alternativo...")
                             raise feature_error
                         
                 else:
-                    logger.warning("⚠️ No se encontró feature_engineer, usando datos directos")
-                    probabilities = self.model.predict_proba(recent_data)
-                    predictions = self.model.predict(recent_data)
+                    error_msg = f"No se encontró feature_engineer para {player_name}"
+                    logger.error(f" {error_msg}")
+                    return {'error': error_msg}
                     
             except Exception as prediction_error:
-                logger.error(f"❌ Error en predicción completa: {prediction_error}")
-                logger.error(f"   🔍 Tipo de error: {type(prediction_error).__name__}")
+                logger.error(f" Error en predicción completa: {prediction_error}")
+                logger.error(f"    Tipo de error: {type(prediction_error).__name__}")
                 
                 # Volver a lanzar el error para que el flujo principal lo maneje
                 raise prediction_error
             
             # Usar la última predicción (corresponde al contexto más reciente)
-            if len(predictions) > 0:
-                # Tomar solo la última predicción del modelo
-                final_prediction = int(np.round(predictions[-1]))
-                
-                # Para probabilidades, también tomar la última
-                recent_probabilities = probabilities[-1:] if len(probabilities) > 0 else probabilities
-                
-                # SOLO PREDECIR PARA JUGADORES QUE HARÁN DOUBLE DOUBLE (YES)
-                if final_prediction != 1:
-                    logger.info(f"❌ No se predice DD para {player_name} (predicción: {final_prediction})")
-                    return None  # No hacer predicción para jugadores que no harán DD
-                
-                # Calcular confianza usando sistema avanzado
-                if len(recent_probabilities) > 0 and recent_probabilities.shape[1] >= 2:
-                    # Usar directamente la probabilidad de la última predicción
-                    probability_yes = recent_probabilities[0][1]  # Probabilidad de "yes" de la última predicción
-                    
-                    # Sistema de confianza avanzado basado en total_points
-                    confidence = self._calculate_confidence(
-                        player_data=recent_data,
-                        probability_yes=probability_yes,
-                        is_home=game_data.get('is_home', False) if game_data else False,
-                        historical_games=len(recent_data)
-                    )
-                else:
-                    confidence = 50.0  # Confianza neutral si no hay probabilidades
-                
-                # CALCULAR ESTADÍSTICAS DETALLADAS PARA PREDICTION_DETAILS
-                # Últimos 5 juegos
-                last_5_games = recent_data.tail(5)['DD'] if len(recent_data) >= 5 and 'DD' in recent_data.columns else recent_data['DD'] if 'DD' in recent_data.columns else pd.Series([0])
-                last_5_stats = {
-                    'mean': round(last_5_games.mean(), 1) if len(last_5_games) > 0 else 0,
-                    'std': round(last_5_games.std(), 1) if len(last_5_games) > 1 else 0,
-                    'min': int(last_5_games.min()) if len(last_5_games) > 0 else 0,
-                    'max': int(last_5_games.max()) if len(last_5_games) > 0 else 0,
-                    'count': len(last_5_games)
-                }
-                
-                # Últimos 10 juegos
-                last_10_games = recent_data.tail(10)['DD'] if len(recent_data) >= 10 and 'DD' in recent_data.columns else recent_data['DD'] if 'DD' in recent_data.columns else pd.Series([0])
+            if len(predictions) == 0:
+                error_msg = f"Modelo no generó predicciones para {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            # Tomar solo la última predicción del modelo
+            final_prediction = int(np.round(predictions[-1]))
+            
+            # Para probabilidades, también tomar la última
+            if len(probabilities) == 0:
+                error_msg = f"Modelo no generó probabilidades para {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            recent_probabilities = probabilities[-1:]
+            
+            # SOLO PREDECIR PARA JUGADORES QUE HARÁN DOUBLE DOUBLE (YES)
+            if final_prediction != 1:
+                logger.info(f" No se predice DD para {player_name} (predicción: {final_prediction})")
+                return None  # No hacer predicción para jugadores que no harán DD
+            
+            # Calcular confianza usando sistema avanzado
+            if recent_probabilities.shape[1] < 2:
+                error_msg = f"Probabilidades insuficientes para {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            # Usar directamente la probabilidad de la última predicción
+            probability_yes = recent_probabilities[0][1]  # Probabilidad de "yes" de la última predicción
+            
+            # Sistema de confianza avanzado basado en total_points
+            confidence = self._calculate_confidence(
+                player_data=recent_data,
+                probability_yes=probability_yes,
+                is_home=game_data.get('is_home', False) if game_data else False,
+                historical_games=len(recent_data)
+            )
+            
+            # CALCULAR ESTADÍSTICAS DETALLADAS PARA PREDICTION_DETAILS (SIN FALLBACKS)
+            if 'double_double' not in recent_data.columns:
+                error_msg = f"Columna 'double_double' no encontrada en datos históricos de {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            historical_dd = recent_data['double_double'].dropna()
+            
+            if len(historical_dd) < 5:
+                error_msg = f"Datos insuficientes de double_double para {player_name}: solo {len(historical_dd)} juegos válidos (mínimo requerido: 5)"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            # Últimos 5 juegos
+            last_5_games = historical_dd.tail(5)
+            last_5_stats = {
+                'mean': round(last_5_games.mean(), 1),
+                'std': round(last_5_games.std(), 1) if len(last_5_games) > 1 else 0,
+                'min': int(last_5_games.min()),
+                'max': int(last_5_games.max()),
+                'count': len(last_5_games)
+            }
+            
+            # Últimos 10 juegos
+            if len(historical_dd) >= 10:
+                last_10_games = historical_dd.tail(10)
                 last_10_stats = {
-                    'mean': round(last_10_games.mean(), 1) if len(last_10_games) > 0 else 0,
-                    'std': round(last_10_games.std(), 1) if len(last_10_games) > 1 else 0,
-                    'min': int(last_10_games.min()) if len(last_10_games) > 0 else 0,
-                    'max': int(last_10_games.max()) if len(last_10_games) > 0 else 0,
+                    'mean': round(last_10_games.mean(), 1),
+                    'std': round(last_10_games.std(), 1),
+                    'min': int(last_10_games.min()),
+                    'max': int(last_10_games.max()),
                     'count': len(last_10_games)
                 }
                 
                 # Análisis de tendencia
-                if len(recent_data) >= 5 and 'DD' in recent_data.columns:
-                    recent_5_mean = last_5_games.mean()
-                    recent_10_mean = last_10_games.mean() if len(recent_data) >= 10 else recent_5_mean
-                    trend_5_games = recent_5_mean - recent_10_mean
-                else:
-                    trend_5_games = 0
-                    recent_5_mean = 0
-                
-                # Score de consistencia
-                dd_std = recent_data['DD'].std() if 'DD' in recent_data.columns else 0
-                consistency_score = max(0, 100 - (dd_std * 100)) if dd_std > 0 else 100
-                
-                # Forma reciente (promedio de últimos 3 juegos)
-                recent_form = recent_data.tail(3)['DD'].mean() if len(recent_data) >= 3 and 'DD' in recent_data.columns else 0
-                
-                # CALCULAR ESTADÍSTICAS H2H DETALLADAS
-                h2h_stats = self.confidence_calculator.calculate_player_h2h_stats(
-                    player_name=player_name,
-                    opponent_team=player_data.get('Opp', 'Unknown'),
-                    target_stat='DD',
-                    max_games=10
-                )
-                
-                # APLICAR FACTOR H2H A LA PREDICCIÓN
-                h2h_factor = h2h_stats.get('h2h_factor', 1.0)
-                if h2h_factor != 1.0 and h2h_stats.get('games_found', 0) >= 3:
-                    raw_prediction_adjusted = final_prediction * h2h_factor
-                    logger.info(f"🎯 Aplicando factor H2H {h2h_factor:.3f} a predicción DD: {final_prediction:.1f} -> {raw_prediction_adjusted:.1f}")
-                else:
-                    raw_prediction_adjusted = final_prediction
+                recent_5_mean = last_5_games.mean()
+                recent_10_mean = last_10_games.mean()
+                trend_5_games = recent_5_mean - recent_10_mean
             else:
-                final_prediction = 0
-                confidence = 50.0
+                # Si hay menos de 10 juegos, usar todos los disponibles
+                last_10_stats = {
+                    'mean': round(historical_dd.mean(), 1),
+                    'std': round(historical_dd.std(), 1) if len(historical_dd) > 1 else 0,
+                    'min': int(historical_dd.min()),
+                    'max': int(historical_dd.max()),
+                    'count': len(historical_dd)
+                }
+                trend_5_games = 0
+                recent_5_mean = historical_dd.mean()
+            
+            # Score de consistencia
+            dd_std = historical_dd.std() if len(historical_dd) > 1 else 0
+            consistency_score = max(0, 100 - (dd_std * 100)) if dd_std > 0 else 100
+            
+            # Forma reciente (promedio de últimos 3 juegos)
+            if len(historical_dd) >= 3:
+                recent_form = historical_dd.tail(3).mean()
+            else:
+                recent_form = historical_dd.mean()
+            
+            # CALCULAR ESTADÍSTICAS H2H DETALLADAS
+            opponent_for_h2h = player_data.get('opponent_team', player_data.get('Opp', 'Unknown'))
+            h2h_stats = self.confidence_calculator.calculate_player_h2h_stats(
+                player_name=player_name,
+                opponent_team=opponent_for_h2h,
+                target_stat='double_double',
+                max_games=10
+            )
+            
+            # APLICAR FACTOR H2H A LA PREDICCIÓN (SOLO SI HAY DATOS SUFICIENTES)
+            h2h_factor = h2h_stats.get('h2h_factor', None)
+            h2h_games = h2h_stats.get('games_found', 0)
+            
+            if h2h_factor is not None and h2h_games >= 3:
+                # Si hay suficientes datos H2H, aplicar el factor
+                raw_prediction_adjusted = final_prediction * h2h_factor
+                logger.info(f" Aplicando factor H2H {h2h_factor:.3f} a predicción DD: {final_prediction:.1f} -> {raw_prediction_adjusted:.1f} (basado en {h2h_games} juegos H2H)")
+            else:
+                # Si no hay suficientes datos H2H, NO AJUSTAR (sin fallback a 1.0)
+                raw_prediction_adjusted = final_prediction
+                if h2h_games < 3:
+                    logger.warning(f" No se aplica factor H2H: solo {h2h_games} juegos H2H encontrados (mínimo requerido: 3)")
             
             # Asegurar que la confianza esté en rango válido
             confidence = max(50.0, min(95.0, confidence))
@@ -514,8 +527,8 @@ class DoubleDoublePredictor:
                     'raw_prediction': final_prediction,
                     'h2h_adjusted_prediction': round(raw_prediction_adjusted, 1) if 'raw_prediction_adjusted' in locals() else final_prediction,
                     'final_prediction': final_prediction,
-                    'actual_stats_mean': round(recent_data['DD'].mean(), 1) if 'DD' in recent_data.columns else 0,
-                    'actual_stats_std': round(recent_data['DD'].std(), 1) if 'DD' in recent_data.columns else 0,
+                    'actual_stats_mean': round(recent_data['double_double'].mean(), 1) if 'double_double' in recent_data.columns else 0,
+                    'actual_stats_std': round(recent_data['double_double'].std(), 1) if 'double_double' in recent_data.columns else 0,
                     'last_5_games': last_5_stats if 'last_5_stats' in locals() else {'mean': 0, 'std': 0, 'min': 0, 'max': 0, 'count': 0},
                     'last_10_games': last_10_stats if 'last_10_stats' in locals() else {'mean': 0, 'std': 0, 'min': 0, 'max': 0, 'count': 0},
                     'trend_analysis': {
@@ -545,7 +558,7 @@ class DoubleDoublePredictor:
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en predict_single_player: {e}")
+            logger.error(f" Error en predict_single_player: {e}")
             return {
                 'error': f'Error en predicción: {str(e)}',
                 'dd_prediction': 0,
@@ -571,9 +584,9 @@ class DoubleDoublePredictor:
             model_confidence = probability_yes * 100
             
             # FACTOR 2: Consistencia histórica del jugador (25% del peso)
-            if 'DD' in player_data.columns:
-                dd_rate = player_data['DD'].mean()
-                dd_std = player_data['DD'].std()
+            if 'double_double' in player_data.columns:
+                dd_rate = player_data['double_double'].mean()
+                dd_std = player_data['double_double'].std()
                 
                 # Mayor tasa de DD = mayor confianza
                 dd_rate_confidence = dd_rate * 100
@@ -586,21 +599,23 @@ class DoubleDoublePredictor:
                     
                 historical_consistency = (dd_rate_confidence + consistency_confidence) / 2
             else:
-                historical_consistency = 70  # Default si no hay datos de DD
+                # Si no hay columna 'double_double', no podemos calcular confianza
+                return 50.0  # Retornar confianza mínima
             
             # FACTOR 3: Tendencia reciente (20% del peso)
-            if len(player_data) >= 10:
-                recent_5 = player_data.tail(5)['DD'].mean() if 'DD' in player_data.columns else 0.5
-                recent_10 = player_data.tail(10)['DD'].mean() if 'DD' in player_data.columns else 0.5
+            if len(player_data) >= 10 and 'double_double' in player_data.columns:
+                recent_5 = player_data.tail(5)['double_double'].mean()
+                recent_10 = player_data.tail(10)['double_double'].mean()
                 
                 # Si la tendencia reciente es mejor que el promedio general, aumentar confianza
-                overall_rate = player_data['DD'].mean() if 'DD' in player_data.columns else 0.5
+                overall_rate = player_data['double_double'].mean()
                 if recent_5 > overall_rate:
                     trend_confidence = min(95, recent_5 * 120)  # Boost por tendencia positiva
                 else:
                     trend_confidence = recent_5 * 100
             else:
-                trend_confidence = 70  # Default para pocos datos
+                # Pocos datos o columna faltante, usar promedio de datos disponibles
+                trend_confidence = (dd_rate * 100) if 'double_double' in player_data.columns else 50.0
             
             # FACTOR 4: Cantidad de datos históricos (10% del peso)
             if historical_games >= 25:
@@ -643,7 +658,7 @@ class DoubleDoublePredictor:
             # APLICAR LÍMITES REALISTAS (50% - 95%)
             final_confidence = max(50.0, min(95.0, weighted_confidence))
             
-            logger.info(f"🎯 Confianza DD calculada: {final_confidence:.1f}% "
+            logger.info(f" Confianza DD calculada: {final_confidence:.1f}% "
                        f"(modelo:{model_confidence:.0f}, hist:{historical_consistency:.0f}, "
                        f"trend:{trend_confidence:.0f}, data:{data_confidence:.0f}, "
                        f"game:{game_context:.0f})")
@@ -651,13 +666,13 @@ class DoubleDoublePredictor:
             return final_confidence
             
         except Exception as e:
-            logger.warning(f"⚠️ Error calculando confianza DD: {e}")
+            logger.warning(f" Error calculando confianza DD: {e}")
             return 75.0  # Confianza por defecto
     
    
 def main():
     """Función de prueba del Double Double Predictor"""
-    logger.info("🧪 PROBANDO DOUBLE DOUBLE PREDICTOR")
+    logger.info(" PROBANDO DOUBLE DOUBLE PREDICTOR")
     logger.info("=" * 50)
     
     try:
@@ -665,9 +680,9 @@ def main():
         predictor = DoubleDoublePredictor()
         
         # Cargar datos y modelo
-        logger.info("📂 Cargando datos y modelo...")
+        logger.info(" Cargando datos y modelo...")
         if not predictor.load_data_and_model():
-            logger.error("❌ No se pudo cargar el modelo")
+            logger.error(" No se pudo cargar el modelo")
             return False
         
         # Crear datos reales basados en el formato de SportRadar real proporcionado
@@ -796,30 +811,30 @@ def main():
             ("Shai Gilgeous-Alexander", "Muy bueno pero más scorer, podría ser NO")
         ]
         
-        logger.info("🎯 Probando predicciones de double double:")
+        logger.info(" Probando predicciones de double double:")
         for player_name, description in test_players:
             logger.info(f"\n   Prediciendo: {player_name} ({description})")
             
             result = predictor.predict_game(mock_sportradar_game, player_name)
             
             if result is not None and 'error' not in result and 'target_name' in result:
-                logger.info(f"   ✅ Resultado (formato JSON exacto):")
+                logger.info(f"    Resultado (formato JSON exacto):")
                 print(json.dumps(result, indent=6, ensure_ascii=False))
             elif result is not None and 'message' in result:
-                logger.info(f"   ✅ Resultado:")
+                logger.info(f"    Resultado:")
                 logger.info(f"      {result['message']}")
             elif result is None:
-                logger.info(f"   ⚠️ Jugador no disponible para predicción")
+                logger.info(f"    Jugador no disponible para predicción")
             else:
-                logger.info(f"   ❌ Error esperado: {result.get('error', 'Error desconocido')}")
+                logger.info(f"    Error esperado: {result.get('error', 'Error desconocido')}")
                 if 'player_status' in result:
                     logger.info(f"      Estado del jugador: {result['player_status']}")
         
-        logger.info("\n✅ Prueba completada")
+        logger.info("\n Prueba completada")
         return True
         
     except Exception as e:
-        logger.error(f"❌ Error en prueba: {e}")
+        logger.error(f" Error en prueba: {e}")
         import traceback
         traceback.print_exc()
         return False

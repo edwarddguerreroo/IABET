@@ -195,8 +195,8 @@ class SimulacionHistoricaCompleta:
             ]
             
             if not home_data.empty and not away_data.empty:
-                home_score = home_data.iloc[0]['PTS']
-                away_score = away_data.iloc[0]['PTS']
+                home_score = home_data.iloc[0]['points']
+                away_score = away_data.iloc[0]['points']
                 
                 return {
                     'home_score': home_score,

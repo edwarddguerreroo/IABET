@@ -99,7 +99,6 @@ class HalfTimePointsTrainer:
         # Crear directorio de salida con manejo robusto
         try:
             os.makedirs(self.output_dir, exist_ok=True)
-            logger.info(f"Directorio de salida creado/verificado: {self.output_dir}")
         except Exception as e:
             logger.error(f"Error creando directorio {self.output_dir}: {e}")
             # Crear directorio alternativo en caso de error
@@ -138,10 +137,10 @@ class HalfTimePointsTrainer:
         logger.info("Cargando datos NBA")
         
         # Cargar datos con target de halftime usando el data loader
-        self.df, self.teams_df = self.data_loader.load_data_with_halftime_target()
+        self.df, self.teams_df, players_quarters, self.teams_quarters_df = self.data_loader.load_data_with_halftime_target()
         
         # Cargar datasets adicionales de equipos para features
-        self.teams_total_df, self.teams_quarters_df = self.data_loader.load_data(use_quarters=True)
+        self.teams_total_df = self.teams_df
         
         # Actualizar el modelo con todos los datasets
         self.model = HalfTimePointsModel(
@@ -968,20 +967,20 @@ MODELOS BASE:
                 "🚨 CRÍTICO: Reducir complejidad del modelo",
                 "📉 Incrementar regularización en hiperparámetros",
                 "🔧 Considerar feature selection más agresiva",
-                "⚖️ Probar ensemble más simple (menos modelos base)"
+                " Probar ensemble más simple (menos modelos base)"
             ])
         elif overfitting_analysis['severity'] == 'medium':
             recommendations.extend([
-                "⚠️ Ajustar regularización de hiperparámetros",
-                "🎯 Evaluar feature selection",
-                "📊 Monitorear en producción"
+                " Ajustar regularización de hiperparámetros",
+                " Evaluar feature selection",
+                " Monitorear en producción"
             ])
         
         # Recomendaciones generales
         recommendations.extend([
             "📈 Implementar features de player availability",
             "😴 Agregar features de fatiga (back-to-back games)",
-            "🏀 Incorporar features de estilo de juego del oponente",
+            " Incorporar features de estilo de juego del oponente",
             "📉 Considerar target engineering (log transform, etc.)"
         ])
         

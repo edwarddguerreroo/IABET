@@ -397,19 +397,19 @@ class ModelEvaluator:
             best_mae = comparison_df.iloc[0]['MAE']
             
             if best_mae < 1.0:
-                report_lines.append("✅ EXCELENTE: MAE < 1.0 - Modelo listo para producción")
+                report_lines.append(" EXCELENTE: MAE < 1.0 - Modelo listo para producción")
             elif best_mae < 1.3:
-                report_lines.append("✅ BUENO: MAE < 1.3 - Rendimiento competitivo")
+                report_lines.append(" BUENO: MAE < 1.3 - Rendimiento competitivo")
             else:
-                report_lines.append("⚠️  MEJORABLE: MAE > 1.3 - Considerar más datos o features")
+                report_lines.append("  MEJORABLE: MAE > 1.3 - Considerar más datos o features")
             
             # Comparar con baseline actual (1.313)
             baseline_mae = 1.313
             if best_mae < baseline_mae:
                 improvement = ((baseline_mae - best_mae) / baseline_mae) * 100
-                report_lines.append(f"🚀 MEJORA: {improvement:.1f}% mejor que baseline actual")
+                report_lines.append(f" MEJORA: {improvement:.1f}% mejor que baseline actual")
             else:
-                report_lines.append("📊 BASELINE: Modelo actual sigue siendo competitivo")
+                report_lines.append(" BASELINE: Modelo actual sigue siendo competitivo")
         
         report_lines.extend([
             "",

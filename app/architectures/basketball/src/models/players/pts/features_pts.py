@@ -34,8 +34,8 @@ class PointsFeatureEngineer:
         self.correlation_threshold = correlation_threshold
         self.max_features = max_features
         self.teams_df = teams_df  
-        self.players_df = players_df  
-        self.players_quarters_df = players_quarters_df  # Nuevo: datos por cuartos  
+        self.players_df = players_df
+        self.players_quarters_df = players_quarters_df  # Dataset de cuartos desde NBA Data Loader  
         
         # VENTANAS ESPACIADAS para reducir correlación
         self.windows = {
@@ -68,27 +68,24 @@ class PointsFeatureEngineer:
             return True
         return False
 
-    def _safe_divide(self, numerator, denominator, default=0.0):
-        """División segura optimizada"""
-        with np.errstate(divide='ignore', invalid='ignore'):
-            result = np.divide(numerator, denominator)
-            result = np.where(denominator == 0, default, result)
-            result = np.nan_to_num(result, nan=default, posinf=default, neginf=default)
-        return result
-
-    def _get_rolling_stat(self, df: pd.DataFrame, column: str, window: int, operation: str = 'mean') -> pd.Series:
+    def _get_historical_series(self, df: pd.DataFrame, column: str, window: int, operation: str = 'mean') -> pd.Series:
         """
-        Cálculo rolling optimizado con cache para evitar duplicados
+        Cálculo rolling optimizado con validación robusta de índices
         SIEMPRE usa shift(1) para prevenir data leakage (futuros juegos)
         """
-        cache_key = f"{column}_{window}_{operation}"
-        
-        if cache_key in self._rolling_cache:
-            return self._rolling_cache[cache_key]
-        
+        # Validar entrada
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError("df debe ser un DataFrame")
         if column not in df.columns:
-            result = pd.Series(0, index=df.index)
-        else:
+            logger.warning(f" Columna '{column}' no encontrada, retornando ceros")
+            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+        
+        # Validar que df esté ordenado cronológicamente
+        if 'Date' in df.columns and not df['Date'].is_monotonic_increasing:
+            df = df.sort_values(['player', 'Date']).reset_index(drop=True)
+        
+        # Calcular rolling con validación de índices
+        try:
             if operation == 'mean':
                 result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
             elif operation == 'std':
@@ -100,14 +97,26 @@ class PointsFeatureEngineer:
             else:
                 result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
             
-            # Reset del MultiIndex a índice simple antes de reindex
-            result = result.reset_index(level=0, drop=True)
+            # Validar que result tenga MultiIndex
+            if isinstance(result.index, pd.MultiIndex):
+                # Reset del MultiIndex a índice simple
+                result = result.reset_index(level=0, drop=True)
             
-            # Asegurar que el índice coincida con el DataFrame original
-            result = result.reindex(df.index, fill_value=0)
-        
-        self._rolling_cache[cache_key] = result
-        return result
+            # Validar alineación de índices antes de reindex
+            if not result.index.equals(df.index):
+                logger.debug(f"Reindexando {column}_{window}_{operation} para alinear índices")
+                result = result.reindex(df.index, fill_value=0)
+            
+            # Validar resultado final
+            if len(result) != len(df):
+                logger.error(f" Error: Longitud de resultado ({len(result)}) != DataFrame ({len(df)})")
+                return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f" Error calculando {column}_{window}_{operation}: {e}")
+            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
 
     def _convert_mp_to_numeric(self, df: pd.DataFrame) -> None:
         """Asegura que la columna 'minutes' esté disponible y en formato decimal"""
@@ -231,7 +240,7 @@ class PointsFeatureEngineer:
         
         missing_from_df = [f for f in created_features if f not in df.columns]
         if missing_from_df:
-            logger.warning(f"⚠️ Features registradas pero no en DataFrame: {missing_from_df}")
+            logger.warning(f" Features registradas pero no en DataFrame: {missing_from_df}")
         
         # USAR SOLO LAS FEATURES REGISTRADAS Y DISPONIBLES
         final_features = available_features
@@ -252,9 +261,9 @@ class PointsFeatureEngineer:
         # Promedio de puntos histórico MEJORADO 
         if 'points' in df.columns:
             # Usar ventanas espaciadas para reducir correlación
-            pts_short = self._get_rolling_stat(df, 'points', self.windows['short'], 'mean')
-            pts_long = self._get_rolling_stat(df, 'points', self.windows['long'], 'mean')
-            pts_season = self._get_rolling_stat(df, 'points', self.windows['season'], 'mean')
+            pts_short = self._get_historical_series(df, 'points', self.windows['short'], 'mean')
+            pts_long = self._get_historical_series(df, 'points', self.windows['long'], 'mean')
+            pts_season = self._get_historical_series(df, 'points', self.windows['season'], 'mean')
             
             # Momentum scoring basado en aceleración de puntos (clipping más suave)
             df['pts_momentum'] = (pts_short - pts_long) / (pts_long - pts_season + 0.1)
@@ -262,7 +271,7 @@ class PointsFeatureEngineer:
             self._register_feature('pts_momentum', 'core_predictive')
             
             # Scoring ceiling (máximo reciente vs promedio)
-            pts_max_recent = self._get_rolling_stat(df, 'points', self.windows['medium'], 'max')
+            pts_max_recent = self._get_historical_series(df, 'points', self.windows['medium'], 'max')
             df['scoring_ceiling'] = pts_max_recent - pts_long
             self._register_feature('scoring_ceiling', 'core_predictive')
             
@@ -270,7 +279,7 @@ class PointsFeatureEngineer:
             # Weighted average que da más peso a juegos recientes
             weights_recent = np.array([0.4, 0.3, 0.2, 0.1])  # Para últimos 4 juegos
             if len(weights_recent) <= self.windows['medium']:
-                # Usar _get_rolling_stat para consistencia
+                # Usar _get_historical_series para consistencia
                 def weighted_average(series):
                     if len(series) < 2:
                         return series.iloc[0] if len(series) > 0 else 0
@@ -279,27 +288,31 @@ class PointsFeatureEngineer:
                 
                 pts_weighted = df.groupby('player')['points'].rolling(
                     window=len(weights_recent), min_periods=2
-                ).apply(weighted_average).reset_index(0, drop=True).fillna(pts_long)
+                ).apply(weighted_average).shift(1)
+                pts_weighted = pts_weighted.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
                 df['pts_weighted_recent'] = pts_weighted
                 self._register_feature('pts_weighted_recent', 'core_predictive')
             
             # ELITE PLAYER FEATURES
             # Explosiveness Factor - Detecta capacidad de juegos excepcionales
-            pts_max_7 = self._get_rolling_stat(df, 'points', 7, 'max')
-            pts_p90_7 = df.groupby('player')['points'].rolling(7, min_periods=3).quantile(0.9).reset_index(0, drop=True)
-            df['explosiveness_factor'] = ((pts_max_7 - pts_p90_7) / (pts_long + 1e-6)).clip(0, 2.0).fillna(0)
+            pts_max_7 = self._get_historical_series(df, 'points', 7, 'max')
+            pts_p90_7 = df.groupby('player')['points'].rolling(7, min_periods=3).quantile(0.9).shift(1)
+            pts_p90_7 = pts_p90_7.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
+            pts_long_avg = self._get_historical_series(df, 'points', self.windows['long'], 'mean')
+            df['explosiveness_factor'] = ((pts_max_7 - pts_p90_7) / (pts_long_avg + 1e-6)).clip(0, 2.0).fillna(0)
             self._register_feature('explosiveness_factor', 'elite_performance')
             
             # Superstar Consistency - Medida de consistencia en alto rendimiento
             pts_above_20 = (df.groupby('player')['points'].rolling(10, min_periods=5)
                            .apply(lambda x: (x >= 20).sum() / len(x))
-                           .reset_index(0, drop=True).fillna(0))
+                           .shift(1))
+            pts_above_20 = pts_above_20.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             df['superstar_consistency'] = pts_above_20
             self._register_feature('superstar_consistency', 'elite_performance')
             
             # Elite Pressure Response - Rendimiento en situaciones críticas
             # Basado en diferencia entre máximo y mínimo recientes
-            pts_min_7 = self._get_rolling_stat(df, 'points', 7, 'min')
+            pts_min_7 = self._get_historical_series(df, 'points', 7, 'min')
             pts_range_7 = pts_max_7 - pts_min_7
             df['elite_pressure_response'] = (pts_long / (pts_range_7 + 1e-6)).clip(0, 3.0).fillna(1.0)
             self._register_feature('elite_pressure_response', 'elite_performance')
@@ -307,7 +320,7 @@ class PointsFeatureEngineer:
             # Dynamic Scoring Ceiling - Se adapta al rango de scoring del jugador
             scoring_tier = (pts_long // 5).clip(0, 8)  # Tiers: 0-5, 5-10, ..., 35-40
             tier_multiplier = 1.0 + scoring_tier * 0.1  # Aumenta con tier más alto
-            df['dynamic_scoring_ceiling'] = (pts_max_recent - pts_long) * tier_multiplier
+            df['dynamic_scoring_ceiling'] = (pts_max_7 - pts_long) * tier_multiplier
             self._register_feature('dynamic_scoring_ceiling', 'elite_performance')
             
             # Enhanced weighted average con ajuste por forma reciente
@@ -346,6 +359,7 @@ class PointsFeatureEngineer:
             # Aplicar contextual adaptive prediction
             try:
                 contextual_results = df.groupby('player', group_keys=False).apply(adaptive_contextual_prediction)
+                contextual_results = contextual_results.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
                 df['contextual_adaptive_pts'] = contextual_results.fillna(pts_long)
             except Exception:
                 # Fallback seguro: usar pts_long si hay problemas con la función compleja
@@ -356,33 +370,44 @@ class PointsFeatureEngineer:
 
         # MP Efficiency Matrix MEJORADA (MP es clave según modelo)
         if 'minutes' in df.columns and 'points' in df.columns:
-            mp_avg = self._get_rolling_stat(df, 'minutes', self.windows['medium'], 'mean')
-            mp_long = self._get_rolling_stat(df, 'minutes', self.windows['long'], 'mean')
-            pts_avg = self._get_rolling_stat(df, 'points', self.windows['medium'], 'mean')
+            mp_avg = self._get_historical_series(df, 'minutes', self.windows['medium'], 'mean')
+            mp_long = self._get_historical_series(df, 'minutes', self.windows['long'], 'mean')
+            pts_avg = self._get_historical_series(df, 'points', self.windows['medium'], 'mean')
             
             # Eficiencia por minuto con boost por high minutes
-            base_efficiency = self._safe_divide(pts_avg, mp_avg + 1)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                base_efficiency = pts_avg / (mp_avg + 1)
+                base_efficiency = base_efficiency.fillna(0).replace([np.inf, -np.inf], 0)
             minutes_multiplier = np.where(mp_avg >= 32, 1.25,      # Elite starters
                                 np.where(mp_avg >= 28, 1.15,       # Strong starters  
                                 np.where(mp_avg >= 20, 1.0,        # Normal
                                 np.where(mp_avg >= 15, 0.85, 0.6)))) # Bench players
             
+            # Multiplicación simple - asegurar que ambos tengan el mismo índice
+            if not isinstance(minutes_multiplier, pd.Series):
+                minutes_multiplier = pd.Series(minutes_multiplier, index=df.index)
+            # Asegurar que ambos tengan el mismo índice
+            base_efficiency, minutes_multiplier = base_efficiency.align(minutes_multiplier, join='inner', fill_value=0)
             df['mp_efficiency_core'] = base_efficiency * minutes_multiplier
 
             self._register_feature('mp_efficiency_core', 'core_predictive')
         
         # Offensive Volume SUPER MEJORADO
         if 'field_goals_att' in df.columns:
-            fga_avg = self._get_rolling_stat(df, 'field_goals_att', self.windows['medium'], 'mean')
-            fga_long = self._get_rolling_stat(df, 'field_goals_att', self.windows['long'], 'mean')
-            fga_season = self._get_rolling_stat(df, 'field_goals_att', self.windows['season'], 'mean')
+            fga_avg = self._get_historical_series(df, 'field_goals_att', self.windows['medium'], 'mean')
+            fga_long = self._get_historical_series(df, 'field_goals_att', self.windows['long'], 'mean')
+            fga_season = self._get_historical_series(df, 'field_goals_att', self.windows['season'], 'mean')
             
             # Volumen ofensivo base
             df['offensive_volume'] = fga_avg
             self._register_feature('offensive_volume', 'core_predictive')
             
             # Volume trend con múltiples capas
-            df['volume_trend'] = self._safe_divide(fga_avg, fga_season + 1, 1.0)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df['volume_trend'] = fga_avg / (fga_season + 1)
+                df['volume_trend'] = df['volume_trend'].fillna(1.0).replace([np.inf, -np.inf], 1.0)
             self._register_feature('volume_trend', 'core_predictive')
 
     def _generate_efficiency_metrics(self, df: pd.DataFrame) -> None:
@@ -393,45 +418,54 @@ class PointsFeatureEngineer:
             
         # Field Goal Efficiency MEJORADO
         if all(col in df.columns for col in ['field_goals_made', 'field_goals_att']):
-            fg_avg = self._get_rolling_stat(df, 'field_goals_made', self.windows['medium'], 'mean')
-            fg_long = self._get_rolling_stat(df, 'field_goals_made', self.windows['long'], 'mean')
-            fga_avg = self._get_rolling_stat(df, 'field_goals_att', self.windows['medium'], 'mean')
-            fga_long = self._get_rolling_stat(df, 'field_goals_att', self.windows['long'], 'mean')
+            fg_avg = self._get_historical_series(df, 'field_goals_made', self.windows['medium'], 'mean')
+            fg_long = self._get_historical_series(df, 'field_goals_made', self.windows['long'], 'mean')
+            fga_avg = self._get_historical_series(df, 'field_goals_att', self.windows['medium'], 'mean')
+            fga_long = self._get_historical_series(df, 'field_goals_att', self.windows['long'], 'mean')
 
             # Crear fg_efficiency base con rolling para mayor estabilidad
-            fg_rolling = self._get_rolling_stat(df, 'field_goals_made', self.windows['medium'], 'mean')
-            fga_rolling = self._get_rolling_stat(df, 'field_goals_att', self.windows['medium'], 'mean')
-            df['fg_efficiency'] = self._safe_divide(fg_rolling, fga_rolling, 0.45)
+            fg_rolling = self._get_historical_series(df, 'field_goals_made', self.windows['medium'], 'mean')
+            fga_rolling = self._get_historical_series(df, 'field_goals_att', self.windows['medium'], 'mean')
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df['fg_efficiency'] = fg_rolling / fga_rolling
+                df['fg_efficiency'] = df['fg_efficiency'].fillna(0.45).replace([np.inf, -np.inf], 0.45)
             self._register_feature('fg_efficiency', 'efficiency_metrics')
 
             # Field goal efficiency trend
-            fg_eff_long = self._safe_divide(fg_long, fga_long, 0.45)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                fg_eff_long = fg_long / fga_long
+                fg_eff_long = fg_eff_long.fillna(0.45).replace([np.inf, -np.inf], 0.45)
             df['fg_efficiency_trend'] = df['fg_efficiency'] - fg_eff_long
             self._register_feature('fg_efficiency_trend', 'efficiency_metrics')
         
         # Three Point Rate MEJORADO
         if all(col in df.columns for col in ['three_points_att', 'field_goals_att', 'three_points_made']):
-            three_pa_avg = self._get_rolling_stat(df, 'three_points_att', self.windows['medium'], 'mean')
-            three_p_avg = self._get_rolling_stat(df, 'three_points_made', self.windows['medium'], 'mean')
-            fga_avg = self._get_rolling_stat(df, 'field_goals_att', self.windows['medium'], 'mean')
+            three_pa_avg = self._get_historical_series(df, 'three_points_att', self.windows['medium'], 'mean')
+            three_p_avg = self._get_historical_series(df, 'three_points_made', self.windows['medium'], 'mean')
+            fga_avg = self._get_historical_series(df, 'field_goals_att', self.windows['medium'], 'mean')
             
-            df['three_point_rate'] = self._safe_divide(three_pa_avg, fga_avg, 0.3)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df['three_point_rate'] = three_pa_avg / fga_avg
+                df['three_point_rate'] = df['three_point_rate'].fillna(0.3).replace([np.inf, -np.inf], 0.3)
              
             self._register_feature('three_point_rate', 'efficiency_metrics')
 
         # Points per Shot MEJORADO
         if all(col in df.columns for col in ['points', 'field_goals_att']):
-            pts_avg = self._get_rolling_stat(df, 'points', self.windows['medium'], 'mean')
-            pts_long = self._get_rolling_stat(df, 'points', self.windows['long'], 'mean')
-            fga_avg = self._get_rolling_stat(df, 'field_goals_att', self.windows['medium'], 'mean')
-            fga_long = self._get_rolling_stat(df, 'field_goals_att', self.windows['long'], 'mean')
+            pts_avg = self._get_historical_series(df, 'points', self.windows['medium'], 'mean')
+            pts_long = self._get_historical_series(df, 'points', self.windows['long'], 'mean')
+            fga_avg = self._get_historical_series(df, 'field_goals_att', self.windows['medium'], 'mean')
+            fga_long = self._get_historical_series(df, 'field_goals_att', self.windows['long'], 'mean')
             
         # Shot Selection Intelligence
         if all(col in df.columns for col in ['field_goals_made', 'field_goals_att', 'three_points_made', 'three_points_att', 'free_throws_made', 'free_throws_att']):
-            fg_avg = self._get_rolling_stat(df, 'field_goals_made', self.windows['medium'], 'mean')
-            fga_avg = self._get_rolling_stat(df, 'field_goals_att', self.windows['medium'], 'mean')
-            three_p_avg = self._get_rolling_stat(df, 'three_points_made', self.windows['medium'], 'mean')
-            ft_avg = self._get_rolling_stat(df, 'free_throws_made', self.windows['medium'], 'mean')
+            fg_avg = self._get_historical_series(df, 'field_goals_made', self.windows['medium'], 'mean')
+            fga_avg = self._get_historical_series(df, 'field_goals_att', self.windows['medium'], 'mean')
+            three_p_avg = self._get_historical_series(df, 'three_points_made', self.windows['medium'], 'mean')
+            ft_avg = self._get_historical_series(df, 'free_throws_made', self.windows['medium'], 'mean')
             
 
     def _generate_ensemble_predictors(self, df: pd.DataFrame) -> None:
@@ -655,19 +689,23 @@ class PointsFeatureEngineer:
         # Advanced Shooting Metrics
         if all(col in df.columns for col in ['field_goals_made', 'field_goals_att', 'three_points_made', 'three_points_att', 'free_throws_made', 'free_throws_att']):
             # Shot distribution intelligence
-            fg_avg = self._get_rolling_stat(df, 'field_goals_made', self.windows['medium'], 'mean')
-            fga_avg = self._get_rolling_stat(df, 'field_goals_att', self.windows['medium'], 'mean')
-            three_p_avg = self._get_rolling_stat(df, 'three_points_made', self.windows['medium'], 'mean')
-            three_pa_avg = self._get_rolling_stat(df, 'three_points_att', self.windows['medium'], 'mean')
-            ft_avg = self._get_rolling_stat(df, 'free_throws_made', self.windows['medium'], 'mean')
+            fg_avg = self._get_historical_series(df, 'field_goals_made', self.windows['medium'], 'mean')
+            fga_avg = self._get_historical_series(df, 'field_goals_att', self.windows['medium'], 'mean')
+            three_p_avg = self._get_historical_series(df, 'three_points_made', self.windows['medium'], 'mean')
+            three_pa_avg = self._get_historical_series(df, 'three_points_att', self.windows['medium'], 'mean')
+            ft_avg = self._get_historical_series(df, 'free_throws_made', self.windows['medium'], 'mean')
             
             # Two-point attempts and makes
             two_pa_avg = fga_avg - three_pa_avg
             two_p_avg = fg_avg - three_p_avg
             
             # Shot making ability por tipo
-            three_p_acc = self._safe_divide(three_p_avg, three_pa_avg, 0.35)
-            two_p_acc = self._safe_divide(two_p_avg, two_pa_avg, 0.50)
+            # Divisiones simples con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                three_p_acc = three_p_avg / three_pa_avg
+                three_p_acc = three_p_acc.fillna(0.35).replace([np.inf, -np.inf], 0.35)
+                two_p_acc = two_p_avg / two_pa_avg
+                two_p_acc = two_p_acc.fillna(0.50).replace([np.inf, -np.inf], 0.50)
             
             # FEATURE ELIMINADA: shot_difficulty_mastery
             # Razón: Importancia 0.1694%, muy baja contribución al modelo
@@ -675,23 +713,26 @@ class PointsFeatureEngineer:
         # Game Impact Metrics (basado en +/-, GmSc, BPM)
         if 'efficiency_game_score' in df.columns:
             # Game Score momentum (trending performance)
-            gmsc_avg = self._get_rolling_stat(df, 'efficiency_game_score', self.windows['medium'], 'mean')
-            gmsc_long = self._get_rolling_stat(df, 'efficiency_game_score', self.windows['long'], 'mean')
+            gmsc_avg = self._get_historical_series(df, 'efficiency_game_score', self.windows['medium'], 'mean')
+            gmsc_long = self._get_historical_series(df, 'efficiency_game_score', self.windows['long'], 'mean')
             
-            df['game_impact_momentum'] = self._safe_divide(gmsc_avg, gmsc_long + 1, 1.0)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df['game_impact_momentum'] = gmsc_avg / (gmsc_long + 1)
+                df['game_impact_momentum'] = df['game_impact_momentum'].fillna(1.0).replace([np.inf, -np.inf], 1.0)
                         
             self._register_feature('game_impact_momentum', 'core_predictive')
         
         if 'plus_minus' in df.columns:
             # Plus/Minus trend (team performance when player is on court)
-            pm_avg = self._get_rolling_stat(df, 'plus_minus', self.windows['medium'], 'mean')
+            pm_avg = self._get_historical_series(df, 'plus_minus', self.windows['medium'], 'mean')
         
         # Playmaking & Rebounds Contribution (AST, TRB, STL, BLK)
         if all(col in df.columns for col in ['assists', 'rebounds', 'steals', 'blocks']):
-            ast_avg = self._get_rolling_stat(df, 'assists', self.windows['medium'], 'mean')
-            trb_avg = self._get_rolling_stat(df, 'rebounds', self.windows['medium'], 'mean')
-            stl_avg = self._get_rolling_stat(df, 'steals', self.windows['medium'], 'mean')
-            blk_avg = self._get_rolling_stat(df, 'blocks', self.windows['medium'], 'mean')
+            ast_avg = self._get_historical_series(df, 'assists', self.windows['medium'], 'mean')
+            trb_avg = self._get_historical_series(df, 'rebounds', self.windows['medium'], 'mean')
+            stl_avg = self._get_historical_series(df, 'steals', self.windows['medium'], 'mean')
+            blk_avg = self._get_historical_series(df, 'blocks', self.windows['medium'], 'mean')
         
     def _generate_advanced_context_features(self, df: pd.DataFrame) -> None:
         """
@@ -704,13 +745,13 @@ class PointsFeatureEngineer:
         
         # 1.1 Promedios móviles específicos (3, 5, 10 partidos)
         if 'points' in df.columns:
-            df['pts_3game_avg'] = self._get_rolling_stat(df, 'points', 3, 'mean')
+            df['pts_3game_avg'] = self._get_historical_series(df, 'points', 3, 'mean')
 
             self._register_feature('pts_3game_avg', 'core_predictive')
 
         # 1.2 Tendencia con regresión lineal (pendiente de últimos N partidos)  
         if 'points' in df.columns:
-            # Usar _get_rolling_stat para consistencia y evitar data leakage
+            # Usar _get_historical_series para consistencia y evitar data leakage
             def calculate_trend(series, window):
                 if len(series) < 3:
                     return 0
@@ -723,26 +764,30 @@ class PointsFeatureEngineer:
                 except:
                     return 0
             
-            # Calcular tendencias usando _get_rolling_stat
-            df['pts_trend_5game'] = df.groupby('player')['points'].transform(
+            # Calcular tendencias usando _get_historical_series
+            pts_trend_5game = df.groupby('player')['points'].transform(
                 lambda x: x.rolling(5, min_periods=3).apply(
                     lambda y: calculate_trend(y, 5)
                 )
             ).fillna(0)
+            pts_trend_5game = pts_trend_5game.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
+            df['pts_trend_5game'] = pts_trend_5game
             
-            df['pts_trend_10game'] = df.groupby('player')['points'].transform(
+            pts_trend_10game = df.groupby('player')['points'].transform(
                 lambda x: x.rolling(10, min_periods=3).apply(
                     lambda y: calculate_trend(y, 10)
                 )
             ).fillna(0)
+            pts_trend_10game = pts_trend_10game.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
+            df['pts_trend_10game'] = pts_trend_10game
             
             self._register_feature('pts_trend_5game', 'core_predictive')
             self._register_feature('pts_trend_10game', 'core_predictive')
         
         # 1.3 Consistencia avanzada (desviación estándar específica)
         if 'points' in df.columns:
-            pts_5game_std = self._get_rolling_stat(df, 'points', 5, 'std')
-            pts_10game_std = self._get_rolling_stat(df, 'points', 10, 'std')
+            pts_5game_std = self._get_historical_series(df, 'points', 5, 'std')
+            pts_10game_std = self._get_historical_series(df, 'points', 10, 'std')
             
             # Consistency score (menor std = más consistente)
             df['pts_5game_consistency'] = 1 / (1 + pts_5game_std)
@@ -751,7 +796,7 @@ class PointsFeatureEngineer:
 
         # 1.4 Racha actual REAL (partidos consecutivos por encima/debajo de promedio)
         if 'points' in df.columns:
-            pts_season_avg = self._get_rolling_stat(df, 'points', self.windows['season'], 'mean')
+            pts_season_avg = self._get_historical_series(df, 'points', self.windows['season'], 'mean')
             
             def calculate_streak_no_leak(group):
                 """Calcula racha hasta el juego ANTERIOR (sin incluir juego actual)"""
@@ -759,7 +804,8 @@ class PointsFeatureEngineer:
                     return pd.Series([0] * len(group), index=group.index)
                 
                 # Usar solo datos hasta el juego anterior
-                avg_expanded = pts_season_avg[group.index]
+                # Alinear índices para evitar KeyError
+                avg_expanded = pts_season_avg.loc[group.index]
                 streaks = [0]  # Primer juego no tiene streak
                 
                 for i in range(1, len(group)):
@@ -792,8 +838,9 @@ class PointsFeatureEngineer:
                 
                 return pd.Series(streaks, index=group.index)
             
-            df['current_streak'] = df.groupby('player')['points'].apply(calculate_streak_no_leak).reset_index(level=0, drop=True)
-                        
+            current_streak = df.groupby('player')['points'].apply(calculate_streak_no_leak)
+            current_streak = current_streak.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
+            df['current_streak'] = current_streak                        
             self._register_feature('current_streak', 'core_predictive')
         
         # Contextuales del Partido AVANZADOS
@@ -836,13 +883,15 @@ class PointsFeatureEngineer:
             # Aplicar función
             home_away_perf = df.groupby('player')[['is_home', 'points']].apply(
                 calculate_historical_home_away
-            ).reset_index(level=0, drop=True)
+            )
+            home_away_perf = home_away_perf.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             
             df['home_performance'] = home_away_perf['home_performance']
             df['away_performance'] = home_away_perf['away_performance']
             
             # Fill NaN con promedio general del jugador
-            player_avg_hist = df.groupby('player')['points'].expanding().mean().shift(1).reset_index(level=0, drop=True)
+            player_avg_hist = df.groupby('player')['points'].expanding().mean().shift(1)
+            player_avg_hist = player_avg_hist.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)            
             GLOBAL_PTS_MEAN = 14.5  # Promedio histórico NBA aproximado - CONSTANTE SIN DATA LEAKAGE
             df['home_performance'] = df['home_performance'].fillna(player_avg_hist).fillna(GLOBAL_PTS_MEAN)
             df['away_performance'] = df['away_performance'].fillna(player_avg_hist).fillna(GLOBAL_PTS_MEAN)
@@ -884,9 +933,11 @@ class PointsFeatureEngineer:
                 return pd.Series(results, index=group.index)
             
             # Calcular promedio histórico
-            df['vs_team_avg'] = df.groupby(['player', 'Opp'])['points'].apply(
+            vs_team_avg = df.groupby(['player', 'Opp'])['points'].apply(
                 calculate_historical_vs_team
-            ).reset_index(level=[0,1], drop=True)
+            )
+            vs_team_avg = vs_team_avg.reset_index(level=[0,1], drop=True).reindex(df.index, fill_value=0)
+            df['vs_team_avg'] = vs_team_avg
             
             # Promedio general del jugador
             def calculate_historical_overall(group):
@@ -903,9 +954,11 @@ class PointsFeatureEngineer:
                             results.append(np.nan)
                 return pd.Series(results, index=group.index)
             
-            df['player_overall_avg'] = df.groupby('player')['points'].apply(
+            player_overall_avg = df.groupby('player')['points'].apply(
                 calculate_historical_overall
-            ).reset_index(level=0, drop=True)
+            )
+            player_overall_avg = player_overall_avg.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
+            df['player_overall_avg'] = player_overall_avg
             
             # Fill NaN with defaults and calculate advantage
             GLOBAL_PTS_MEAN = 14.5  # Promedio histórico NBA aproximado
@@ -958,7 +1011,8 @@ class PointsFeatureEngineer:
                 # Calcular promedio de asistencias por equipo basado en datos históricos
                 team_ast_rolling = df.groupby('Team')['assists'].rolling(
                     window=10, min_periods=1
-                ).mean().shift(1).reset_index(0, drop=True)
+                ).mean().shift(1)
+                team_ast_rolling = team_ast_rolling.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
                 
                 # Asignar con manejo de índices
                 if len(team_ast_rolling) == len(df):
@@ -973,13 +1027,6 @@ class PointsFeatureEngineer:
             df['team_assists_avg'] = 25.0
         
             self._register_feature('team_assists_avg', 'context_adjusters')
-            
-        # Situación de Juego AVANZADA
-        
-        # 5.1 Importancia del partido mejorada - SIEMPRE crear las features
-        # FEATURES ELIMINADAS: playoff_race, season_finale, midseason_form
-        # Razón: Importancia 0.0 - 0.0057%, no aportan al modelo
-        pass
 
     def _generate_momentum_variability_features(self, df: pd.DataFrame) -> None:
         """
@@ -999,20 +1046,24 @@ class PointsFeatureEngineer:
                 window=3, min_periods=1
             ).apply(
                 lambda x: np.average(x, weights=weights_3game[:len(x)]) if len(x) > 0 else 0
-            ).shift(1).reset_index(0, drop=True).fillna(0)
+            ).shift(1)
+            rolling_momentum_3games = rolling_momentum_3games.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
 
             # Momentum acceleration (diferencia entre momentum actual vs anterior)
-            momentum_5game = self._get_rolling_stat(df, 'points', 5, 'mean')
-            momentum_10game = self._get_rolling_stat(df, 'points', 10, 'mean')
+            momentum_5game = self._get_historical_series(df, 'points', 5, 'mean')
+            momentum_10game = self._get_historical_series(df, 'points', 10, 'mean')
             
             df['momentum_acceleration'] = momentum_5game - momentum_10game
             self._register_feature('momentum_acceleration', 'core_predictive')
             
             # Volatility index (coeficiente de variación últimos 10 partidos)
-            pts_10_std = self._get_rolling_stat(df, 'points', 10, 'std')
-            pts_10_mean = self._get_rolling_stat(df, 'points', 10, 'mean')
+            pts_10_std = self._get_historical_series(df, 'points', 10, 'std')
+            pts_10_mean = self._get_historical_series(df, 'points', 10, 'mean')
             
-            df['volatility_index'] = self._safe_divide(pts_10_std, pts_10_mean, 0.3)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df['volatility_index'] = pts_10_std / pts_10_mean
+                df['volatility_index'] = df['volatility_index'].fillna(0.3).replace([np.inf, -np.inf], 0.3)
             df['volatility_index'] = df['volatility_index'].clip(0, 2)  # Clip extremos
             
             self._register_feature('volatility_index', 'core_predictive')
@@ -1024,8 +1075,8 @@ class PointsFeatureEngineer:
             # Rating ofensivo del equipo (puntos por 100 posesiones aproximado)
             team_pts_L5 = df.groupby('Team')['points'].rolling(
                 window=5, min_periods=1
-            ).sum().shift(1).reset_index(0, drop=True).fillna(500)  # 5 games total
-            
+            ).sum().shift(1) # 5 games total
+            team_pts_L5 = team_pts_L5.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
             df['team_offensive_rating_L5'] = team_pts_L5 / 5  # Promedio por partido
             self._register_feature('team_offensive_rating_L5', 'context_adjusters')
             
@@ -1073,10 +1124,6 @@ class PointsFeatureEngineer:
                 
                 return pd.Series(results, index=group.index)
             
-            # FEATURE ELIMINADA: opponent_pts_allowed_vs_position
-            # Razón: Importancia 0.0%, no aporta al modelo
-            pass
-        
         # 3.3 Opponent defensive trend (tendencia defensiva últimos 5 partidos)
         if self.teams_df is not None and 'Opp' in df.columns:
             try:
@@ -1122,12 +1169,15 @@ class PointsFeatureEngineer:
 
         # 5.2 Usage vs efficiency ratio
         if all(col in df.columns for col in ['field_goals_att', 'free_throws_att', 'true_shooting_pct']):
-            fga_avg = self._get_rolling_stat(df, 'field_goals_att', 7, 'mean')
-            fta_avg = self._get_rolling_stat(df, 'free_throws_att', 7, 'mean')
-            ts_avg = self._get_rolling_stat(df, 'true_shooting_pct', 7, 'mean')
+            fga_avg = self._get_historical_series(df, 'field_goals_att', 7, 'mean')
+            fta_avg = self._get_historical_series(df, 'free_throws_att', 7, 'mean')
+            ts_avg = self._get_historical_series(df, 'true_shooting_pct', 7, 'mean')
             
             usage_estimate = fga_avg + 0.44 * fta_avg  # Approximation
-            df['usage_vs_efficiency'] = self._safe_divide(ts_avg, usage_estimate + 1, 0.5)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df['usage_vs_efficiency'] = ts_avg / (usage_estimate + 1)
+                df['usage_vs_efficiency'] = df['usage_vs_efficiency'].fillna(0.5).replace([np.inf, -np.inf], 0.5)
             
             self._register_feature('usage_vs_efficiency', 'efficiency_metrics')
         
@@ -1155,21 +1205,38 @@ class PointsFeatureEngineer:
         # Z-Score Rolling por jugador
         if 'player' in df.columns:
             # Z-score basado en partidos PREVIOS (sin usar el juego actual)
-            pts_rolling_mean = self._get_rolling_stat(df, 'points', 10, 'mean')
-            pts_rolling_std = self._get_rolling_stat(df, 'points', 10, 'std')
+            pts_rolling_mean = self._get_historical_series(df, 'points', 10, 'mean')
+            pts_rolling_std = self._get_historical_series(df, 'points', 10, 'std')
             
             # Usar promedio de últimos 3 juegos en lugar de solo el último juego
-            pts_recent_3 = self._get_rolling_stat(df, 'points', 3, 'mean')
+            pts_recent_3 = self._get_historical_series(df, 'points', 3, 'mean')
             
-            df['pts_zscore_10game'] = np.where(
+            # Asegurar que todos los arrays tengan el mismo índice
+            pts_rolling_std, pts_recent_3 = pts_rolling_std.align(pts_recent_3, join='inner', fill_value=0)
+            pts_rolling_std, pts_rolling_mean = pts_rolling_std.align(pts_rolling_mean, join='inner', fill_value=0)
+            
+            zscore_values = np.where(
                 pts_rolling_std > 0.1,
                 (pts_recent_3 - pts_rolling_mean) / pts_rolling_std,
                 0
             )
+            df['pts_zscore_10game'] = pd.Series(zscore_values, index=pts_rolling_std.index)
             
             # Z-score de la temporada
-            pts_season_mean = self._get_rolling_stat(df, 'points', self.windows['season'], 'mean')
-            pts_season_std = self._get_rolling_stat(df, 'points', self.windows['season'], 'std')
+            pts_season_mean = self._get_historical_series(df, 'points', self.windows['season'], 'mean')
+            pts_season_std = self._get_historical_series(df, 'points', self.windows['season'], 'std')
+            
+            # Asegurar que todas las Series tengan el mismo índice
+            pts_recent_3, pts_season_mean = pts_recent_3.align(pts_season_mean, join='inner', fill_value=0)
+            pts_recent_3, pts_season_std = pts_recent_3.align(pts_season_std, join='inner', fill_value=1)
+            
+            # Crear Series con el índice correcto si están vacías
+            if len(pts_recent_3) == 0:
+                pts_recent_3 = pd.Series(0, index=df.index)
+            if len(pts_season_mean) == 0:
+                pts_season_mean = pd.Series(0, index=df.index)
+            if len(pts_season_std) == 0:
+                pts_season_std = pd.Series(1, index=df.index)
             
             df['pts_zscore_season'] = np.where(
                 pts_season_std > 0.1,
@@ -1257,10 +1324,10 @@ class PointsFeatureEngineer:
         if self._register_feature('game_impact_momentum', 'ensemble_predictors'):
             if 'points' in df.columns:
                 # Combinar múltiples métricas de momentum
-                pts_momentum = self._get_rolling_stat(df, 'points', 3, 'mean') - self._get_rolling_stat(df, 'points', 7, 'mean')
+                pts_momentum = self._get_historical_series(df, 'points', 3, 'mean') - self._get_historical_series(df, 'points', 7, 'mean')
                 
                 # Añadir componente de variabilidad (explosividad)
-                pts_volatility = self._get_rolling_stat(df, 'points', 5, 'std')
+                pts_volatility = self._get_historical_series(df, 'points', 5, 'std')
                 
                 # Combinar momentum + volatilidad
                 df['game_impact_momentum'] = (pts_momentum * (1 + pts_volatility / 10)).fillna(0)
@@ -1301,8 +1368,8 @@ class PointsFeatureEngineer:
         # EFFICIENCY METRICS DIRECTAS (usar las ya calculadas)
         if 'efficiency' in df.columns:
             # Usar directamente efficiency del dataset
-            efficiency_avg = self._get_rolling_stat(df, 'efficiency', self.windows['medium'], 'mean')
-            efficiency_long = self._get_rolling_stat(df, 'efficiency', self.windows['long'], 'mean')
+            efficiency_avg = self._get_historical_series(df, 'efficiency', self.windows['medium'], 'mean')
+            efficiency_long = self._get_historical_series(df, 'efficiency', self.windows['long'], 'mean')
             
             df['efficiency_rolling_avg'] = efficiency_avg
             df['efficiency_momentum'] = efficiency_avg - efficiency_long
@@ -1311,8 +1378,8 @@ class PointsFeatureEngineer:
         
         # OFFENSIVE & DEFENSIVE RATING FEATURES
         if 'offensive_rating' in df.columns:
-            off_rating_avg = self._get_rolling_stat(df, 'offensive_rating', self.windows['medium'], 'mean')
-            off_rating_long = self._get_rolling_stat(df, 'offensive_rating', self.windows['long'], 'mean')
+            off_rating_avg = self._get_historical_series(df, 'offensive_rating', self.windows['medium'], 'mean')
+            off_rating_long = self._get_historical_series(df, 'offensive_rating', self.windows['long'], 'mean')
             
             df['offensive_rating_avg'] = off_rating_avg
             df['offensive_rating_trend'] = off_rating_avg - off_rating_long
@@ -1320,22 +1387,22 @@ class PointsFeatureEngineer:
             self._register_feature('offensive_rating_trend', 'efficiency_metrics')
         
         if 'defensive_rating' in df.columns:
-            def_rating_avg = self._get_rolling_stat(df, 'defensive_rating', self.windows['medium'], 'mean')
+            def_rating_avg = self._get_historical_series(df, 'defensive_rating', self.windows['medium'], 'mean')
             df['defensive_impact'] = 120 - def_rating_avg  # Convertir a "mejor = mayor"
             self._register_feature('defensive_impact', 'efficiency_metrics')
         
         # ADVANCED SHOOTING METRICS
         if 'effective_fg_pct' in df.columns:
-            efg_avg = self._get_rolling_stat(df, 'effective_fg_pct', self.windows['medium'], 'mean')
-            efg_long = self._get_rolling_stat(df, 'effective_fg_pct', self.windows['long'], 'mean')
+            efg_avg = self._get_historical_series(df, 'effective_fg_pct', self.windows['medium'], 'mean')
+            efg_long = self._get_historical_series(df, 'effective_fg_pct', self.windows['long'], 'mean')
             
             df['effective_fg_momentum'] = efg_avg - efg_long
             self._register_feature('effective_fg_momentum', 'efficiency_metrics')
         
         # POINTS IN PAINT FEATURES
         if all(col in df.columns for col in ['points_in_paint', 'points_in_paint_att', 'points_in_paint_pct']):
-            pip_avg = self._get_rolling_stat(df, 'points_in_paint', self.windows['medium'], 'mean')
-            pip_pct_avg = self._get_rolling_stat(df, 'points_in_paint_pct', self.windows['medium'], 'mean')
+            pip_avg = self._get_historical_series(df, 'points_in_paint', self.windows['medium'], 'mean')
+            pip_pct_avg = self._get_historical_series(df, 'points_in_paint_pct', self.windows['medium'], 'mean')
             
             df['paint_scoring_avg'] = pip_avg
             df['paint_efficiency'] = pip_pct_avg / 100.0  # Normalizar
@@ -1344,40 +1411,40 @@ class PointsFeatureEngineer:
         
         # FAST BREAK & SECOND CHANCE FEATURES
         if 'fast_break_pts' in df.columns:
-            fb_avg = self._get_rolling_stat(df, 'fast_break_pts', self.windows['medium'], 'mean')
+            fb_avg = self._get_historical_series(df, 'fast_break_pts', self.windows['medium'], 'mean')
             df['fast_break_scoring'] = fb_avg
             self._register_feature('fast_break_scoring', 'opportunity_factors')
         
         if 'second_chance_pts' in df.columns:
-            sc_avg = self._get_rolling_stat(df, 'second_chance_pts', self.windows['medium'], 'mean')
+            sc_avg = self._get_historical_series(df, 'second_chance_pts', self.windows['medium'], 'mean')
             df['second_chance_scoring'] = sc_avg
             self._register_feature('second_chance_scoring', 'opportunity_factors')
         
         # REBOUNDING PERCENTAGE FEATURES (nuevas métricas avanzadas)
         if 'offensive_rebounds_pct' in df.columns:
-            orb_pct_avg = self._get_rolling_stat(df, 'offensive_rebounds_pct', self.windows['medium'], 'mean')
+            orb_pct_avg = self._get_historical_series(df, 'offensive_rebounds_pct', self.windows['medium'], 'mean')
             df['offensive_board_rate'] = orb_pct_avg / 100.0
             self._register_feature('offensive_board_rate', 'opportunity_factors')
         
         if 'defensive_rebounds_pct' in df.columns:
-            drb_pct_avg = self._get_rolling_stat(df, 'defensive_rebounds_pct', self.windows['medium'], 'mean')
+            drb_pct_avg = self._get_historical_series(df, 'defensive_rebounds_pct', self.windows['medium'], 'mean')
             df['defensive_board_rate'] = drb_pct_avg / 100.0
             self._register_feature('defensive_board_rate', 'opportunity_factors')
         
         # TURNOVERS & STEALS PERCENTAGE
         if 'turnovers_pct' in df.columns:
-            tov_pct_avg = self._get_rolling_stat(df, 'turnovers_pct', self.windows['medium'], 'mean')
+            tov_pct_avg = self._get_historical_series(df, 'turnovers_pct', self.windows['medium'], 'mean')
             df['turnover_control'] = 1.0 - (tov_pct_avg / 100.0)  # Invertir: menos TOV = mejor
             self._register_feature('turnover_control', 'efficiency_metrics')
         
         if 'steals_pct' in df.columns:
-            stl_pct_avg = self._get_rolling_stat(df, 'steals_pct', self.windows['medium'], 'mean')
+            stl_pct_avg = self._get_historical_series(df, 'steals_pct', self.windows['medium'], 'mean')
             df['steal_rate'] = stl_pct_avg / 100.0
             self._register_feature('steal_rate', 'efficiency_metrics')
         
         # ASSISTS TO TURNOVER RATIO (ya calculado en dataset)
         if 'assists_turnover_ratio' in df.columns:
-            ast_tov_avg = self._get_rolling_stat(df, 'assists_turnover_ratio', self.windows['medium'], 'mean')
+            ast_tov_avg = self._get_historical_series(df, 'assists_turnover_ratio', self.windows['medium'], 'mean')
             df['playmaking_efficiency'] = ast_tov_avg
             self._register_feature('playmaking_efficiency', 'efficiency_metrics')
         
@@ -1402,7 +1469,7 @@ class PointsFeatureEngineer:
         logger.debug("Generando features de datos por cuartos...")
         
         if self.players_quarters_df is None:
-            logger.debug("No hay datos por cuartos disponibles")
+            logger.debug("Dataset de cuartos no disponible - saltando features de cuartos")
             return
         
         try:
@@ -1430,7 +1497,8 @@ class PointsFeatureEngineer:
             if len(q4_data) > 0:
                 q4_efficiency = q4_data.groupby('player')['efficiency'].rolling(
                     window=10, min_periods=3
-                ).mean().shift(1).reset_index(level=0, drop=True)
+                ).mean().shift(1)
+                q4_efficiency = q4_efficiency.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
                 
                 q4_mapping = dict(zip(q4_data['player'], q4_efficiency))
                 df['clutch_efficiency'] = df['player'].map(q4_mapping).fillna(10)
@@ -1442,7 +1510,8 @@ class PointsFeatureEngineer:
                 quarter_consistency = quarters_df.groupby(['player', 'Date', 'game_id'])['points'].std().reset_index()
                 quarter_consistency_avg = quarter_consistency.groupby('player')['points'].rolling(
                     window=10, min_periods=3
-                ).mean().shift(1).reset_index(level=0, drop=True)
+                ).mean().shift(1)
+                quarter_consistency_avg = quarter_consistency_avg.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
                 
                 consistency_mapping = dict(zip(quarter_consistency['player'], quarter_consistency_avg))
                 df['quarter_consistency'] = df['player'].map(consistency_mapping).fillna(2.0)
@@ -1459,11 +1528,13 @@ class PointsFeatureEngineer:
                 if len(early_quarters) > 0 and len(late_quarters) > 0:
                     early_avg = early_quarters.groupby('player')['points'].rolling(
                         window=10, min_periods=3
-                    ).mean().shift(1).reset_index(level=0, drop=True)
+                    ).mean().shift(1)
+                    early_avg = early_avg.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
                     
                     late_avg = late_quarters.groupby('player')['points'].rolling(
                         window=10, min_periods=3
-                    ).mean().shift(1).reset_index(level=0, drop=True)
+                    ).mean().shift(1)
+                    late_avg = late_avg.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
                     
                     early_mapping = dict(zip(early_quarters['player'], early_avg))
                     late_mapping = dict(zip(late_quarters['player'], late_avg))
@@ -1479,34 +1550,37 @@ class PointsFeatureEngineer:
         
         # 2. BLOCKED SHOTS FEATURES (blocked_att)
         if 'blocked_att' in df.columns:
-            blocked_avg = self._get_rolling_stat(df, 'blocked_att', self.windows['medium'], 'mean')
+            blocked_avg = self._get_historical_series(df, 'blocked_att', self.windows['medium'], 'mean')
             df['shot_blocking_ability'] = blocked_avg
             self._register_feature('shot_blocking_ability', 'efficiency_metrics')
         
         # 3. PLS_MIN FEATURES (Plus/Minus per minute)
         if 'pls_min' in df.columns and 'minutes' in df.columns:
-            pls_min_avg = self._get_rolling_stat(df, 'pls_min', self.windows['medium'], 'mean')
-            mp_avg = self._get_rolling_stat(df, 'minutes', self.windows['medium'], 'mean')
+            pls_min_avg = self._get_historical_series(df, 'pls_min', self.windows['medium'], 'mean')
+            mp_avg = self._get_historical_series(df, 'minutes', self.windows['medium'], 'mean')
             
-            df['impact_per_minute'] = self._safe_divide(pls_min_avg, mp_avg, 0.0)
+            # División simple con manejo de ceros
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df['impact_per_minute'] = pls_min_avg / mp_avg
+                df['impact_per_minute'] = df['impact_per_minute'].fillna(0.0).replace([np.inf, -np.inf], 0.0)
             self._register_feature('impact_per_minute', 'efficiency_metrics')
         
         # 5. EFFICIENCY GAME SCORE FEATURES
         if 'efficiency_game_score' in df.columns:
-            game_score_avg = self._get_rolling_stat(df, 'efficiency_game_score', self.windows['medium'], 'mean')
-            game_score_long = self._get_rolling_stat(df, 'efficiency_game_score', self.windows['long'], 'mean')
+            game_score_avg = self._get_historical_series(df, 'efficiency_game_score', self.windows['medium'], 'mean')
+            game_score_long = self._get_historical_series(df, 'efficiency_game_score', self.windows['long'], 'mean')
             
             df['game_score_momentum'] = game_score_avg - game_score_long
-            df['game_score_consistency'] = 1.0 / (1.0 + self._get_rolling_stat(df, 'efficiency_game_score', self.windows['medium'], 'std'))
+            df['game_score_consistency'] = 1.0 / (1.0 + self._get_historical_series(df, 'efficiency_game_score', self.windows['medium'], 'std'))
             
             self._register_feature('game_score_momentum', 'efficiency_metrics')
             self._register_feature('game_score_consistency', 'efficiency_metrics')
 
         # 8. SECOND CHANCE FEATURES MEJORADAS
         if all(col in df.columns for col in ['second_chance_att', 'second_chance_made', 'second_chance_pct']):
-            sc_att_avg = self._get_rolling_stat(df, 'second_chance_att', self.windows['medium'], 'mean')
-            sc_made_avg = self._get_rolling_stat(df, 'second_chance_made', self.windows['medium'], 'mean')
-            sc_pct_avg = self._get_rolling_stat(df, 'second_chance_pct', self.windows['medium'], 'mean')
+            sc_att_avg = self._get_historical_series(df, 'second_chance_att', self.windows['medium'], 'mean')
+            sc_made_avg = self._get_historical_series(df, 'second_chance_made', self.windows['medium'], 'mean')
+            sc_pct_avg = self._get_historical_series(df, 'second_chance_pct', self.windows['medium'], 'mean')
             
             df['second_chance_volume'] = sc_att_avg
             df['second_chance_conversion'] = sc_pct_avg / 100.0
@@ -1518,9 +1592,9 @@ class PointsFeatureEngineer:
         
         # 9. FAST BREAK FEATURES MEJORADAS
         if all(col in df.columns for col in ['fast_break_att', 'fast_break_made', 'fast_break_pct']):
-            fb_att_avg = self._get_rolling_stat(df, 'fast_break_att', self.windows['medium'], 'mean')
-            fb_made_avg = self._get_rolling_stat(df, 'fast_break_made', self.windows['medium'], 'mean')
-            fb_pct_avg = self._get_rolling_stat(df, 'fast_break_pct', self.windows['medium'], 'mean')
+            fb_att_avg = self._get_historical_series(df, 'fast_break_att', self.windows['medium'], 'mean')
+            fb_made_avg = self._get_historical_series(df, 'fast_break_made', self.windows['medium'], 'mean')
+            fb_pct_avg = self._get_historical_series(df, 'fast_break_pct', self.windows['medium'], 'mean')
             
             df['fast_break_volume'] = fb_att_avg
             df['fast_break_conversion'] = fb_pct_avg / 100.0
@@ -1533,7 +1607,7 @@ class PointsFeatureEngineer:
 
         # 11. POINTS OFF TURNOVERS
         if 'points_off_turnovers' in df.columns:
-            pot_avg = self._get_rolling_stat(df, 'points_off_turnovers', self.windows['medium'], 'mean')
+            pot_avg = self._get_historical_series(df, 'points_off_turnovers', self.windows['medium'], 'mean')
             df['defensive_conversion_scoring'] = pot_avg
             self._register_feature('defensive_conversion_scoring', 'opportunity_factors')
         
@@ -1541,9 +1615,9 @@ class PointsFeatureEngineer:
         
         # Elite Shooter Profile
         if all(col in df.columns for col in ['three_points_pct', 'free_throws_pct', 'effective_fg_pct']):
-            three_pct_avg = self._get_rolling_stat(df, 'three_points_pct', self.windows['medium'], 'mean')
-            ft_pct_avg = self._get_rolling_stat(df, 'free_throws_pct', self.windows['medium'], 'mean')
-            efg_avg = self._get_rolling_stat(df, 'effective_fg_pct', self.windows['medium'], 'mean')
+            three_pct_avg = self._get_historical_series(df, 'three_points_pct', self.windows['medium'], 'mean')
+            ft_pct_avg = self._get_historical_series(df, 'free_throws_pct', self.windows['medium'], 'mean')
+            efg_avg = self._get_historical_series(df, 'effective_fg_pct', self.windows['medium'], 'mean')
             
             # Normalizar y combinar
             three_norm = three_pct_avg / 50.0  # ~50% es elite desde 3
@@ -1555,9 +1629,9 @@ class PointsFeatureEngineer:
         
         # Rebounding Specialist Profile  
         if all(col in df.columns for col in ['offensive_rebounds_pct', 'defensive_rebounds_pct', 'rebounds_pct']):
-            orb_pct_avg = self._get_rolling_stat(df, 'offensive_rebounds_pct', self.windows['medium'], 'mean')
-            drb_pct_avg = self._get_rolling_stat(df, 'defensive_rebounds_pct', self.windows['medium'], 'mean')
-            total_reb_pct_avg = self._get_rolling_stat(df, 'rebounds_pct', self.windows['medium'], 'mean')
+            orb_pct_avg = self._get_historical_series(df, 'offensive_rebounds_pct', self.windows['medium'], 'mean')
+            drb_pct_avg = self._get_historical_series(df, 'defensive_rebounds_pct', self.windows['medium'], 'mean')
+            total_reb_pct_avg = self._get_historical_series(df, 'rebounds_pct', self.windows['medium'], 'mean')
             
             # Normalizar (10% ORB, 20% DRB, 15% total son típicos)
             orb_norm = orb_pct_avg / 15.0
@@ -1569,9 +1643,9 @@ class PointsFeatureEngineer:
         
         # Defensive Impact Profile
         if all(col in df.columns for col in ['steals_pct', 'blocks', 'defensive_rating']):
-            stl_pct_avg = self._get_rolling_stat(df, 'steals_pct', self.windows['medium'], 'mean')
-            blk_avg = self._get_rolling_stat(df, 'blocks', self.windows['medium'], 'mean')
-            def_rating_avg = self._get_rolling_stat(df, 'defensive_rating', self.windows['medium'], 'mean')
+            stl_pct_avg = self._get_historical_series(df, 'steals_pct', self.windows['medium'], 'mean')
+            blk_avg = self._get_historical_series(df, 'blocks', self.windows['medium'], 'mean')
+            def_rating_avg = self._get_historical_series(df, 'defensive_rating', self.windows['medium'], 'mean')
             
             # Normalizar (2% steals, 1 block, 110 def rating son típicos)
             stl_norm = stl_pct_avg / 3.0

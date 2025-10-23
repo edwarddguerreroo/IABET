@@ -98,7 +98,6 @@ class XGBoostPTSTrainer:
         # Crear directorio de salida con manejo robusto
         try:
             os.makedirs(self.output_dir, exist_ok=True)
-            logger.info(f"Directorio de salida creado/verificado: {self.output_dir}")
         except Exception as e:
             logger.error(f"Error creando directorio {self.output_dir}: {e}")
             # Crear directorio alternativo en caso de error
@@ -111,26 +110,24 @@ class XGBoostPTSTrainer:
             players_total_path, players_quarters_path, teams_total_path, teams_quarters_path, biometrics_path
         )
         
-        # Cargar datasets para pasarlos al modelo
-        players_data, teams_data = self.data_loader.load_data(use_quarters=False)
-        players_quarters, _ = self.data_loader.load_data(use_quarters=True)
+        # Datos y resultados (se cargarán en load_and_prepare_data)
+        self.df = None
+        self.teams_df = None
+        self.players_quarters_df = None
+        self.teams_quarters_df = None
         
         self.model = XGBoostPTSModel(
-            teams_df=teams_data,
-            players_df=players_data,
-            players_quarters_df=players_quarters,
+            teams_df=None,  # Se asignará en load_and_prepare_data
+            players_df=None,  # Se asignará en load_and_prepare_data
+            players_quarters_df=None,  # Se asignará en load_and_prepare_data
             n_trials=n_trials,
             cv_folds=cv_folds,
             random_state=random_state
         )
-        
-        # Datos y resultados
-        self.df = None
-        self.teams_df = None
         self.training_results = None
         self.predictions = None
         
-        logger.info(f"Trainer XGBoost PTS inicializado | Output: {self.output_dir}")
+        logger.info(f"Trainer XGBoost PTS inicializado")
     
     def load_and_prepare_data(self) -> pd.DataFrame:
         """
@@ -142,7 +139,15 @@ class XGBoostPTSTrainer:
         logger.info("Cargando datos NBA")
         
         # Cargar datos usando el data loader
-        self.df, self.teams_df = self.data_loader.load_data()
+        self.df, self.teams_df, self.players_quarters_df, self.teams_quarters_df = self.data_loader.load_data()
+        
+        # Actualizar modelo con los datos cargados
+        self.model.teams_df = self.teams_df
+        self.model.players_df = self.df
+        self.model.players_quarters_df = self.players_quarters_df
+        self.model.feature_engineer.teams_df = self.teams_df
+        self.model.feature_engineer.players_df = self.df
+        self.model.feature_engineer.players_quarters_df = self.players_quarters_df
         
         # Estadísticas básicas de los datos
         logger.info(f"Datos cargados: {len(self.df)} registros de jugadores")
@@ -408,6 +413,7 @@ Estado: PRODUCCIÓN
         
         y_true = self.df['points'].values
         y_pred = self.predictions
+        
         
         # Scatter plot predicciones vs reales
         ax.scatter(y_true, y_pred, alpha=0.5, s=10)

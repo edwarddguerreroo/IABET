@@ -15,6 +15,7 @@ import time
 from app.core.logging import configure_logging
 from app.core.config import settings
 from app.api import api_router  # nuestro agregador de routers automáticos
+from app.core.redis_config import RedisClient
 
 # 1) Carga variables de entorno
 load_dotenv()
@@ -32,18 +33,18 @@ async def lifespan(app: FastAPI):
     la aplicación arranca, y asegura que se liberen correctamente al finalizar.
     """
     # Inicio de recursos
-    logger.info("🔄 Startup: cargando recursos (modelos, BD...)")
+    logger.info(" Startup: cargando recursos (modelos, BD...)")
     start_time = time.time()
     
     # Aquí podrías, por ejemplo:
     # await some_database.connect()
     # model = await load_model(settings.MODEL_PATH)
-    
+
     logger.info(f"Recursos cargados en {time.time() - start_time:.2f} segundos")
     yield  # La aplicación se ejecuta aquí
-    
+
     # Limpieza de recursos
-    logger.info("🕛 Shutdown: liberando recursos")
+    logger.info(" Shutdown: liberando recursos")
     # await some_database.disconnect()
 
 # 4) Instancia FastAPI usando lifespan (no on_event)
@@ -118,7 +119,7 @@ app.include_router(api_router, prefix=settings.API_PREFIX)
 async def read_root():
     """Endpoint principal para verificar que la API está funcionando"""
     return {
-        "message": f"{settings.PROJECT_NAME} v{settings.VERSION} ejecutándose 🚀",
+        "message": f"{settings.PROJECT_NAME} v{settings.VERSION} ejecutándose ",
         "environment": settings.ENVIRONMENT,
         "docs": "/docs"
     }

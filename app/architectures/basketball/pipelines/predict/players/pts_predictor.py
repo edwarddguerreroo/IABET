@@ -83,19 +83,19 @@ class PTSPredictor:
                 teams_quarters_path="app/architectures/basketball/data/teams_quarters.csv",
                 biometrics_path="app/architectures/basketball/data/biometrics.csv"
             )
-            self.historical_players, self.historical_teams = data_loader.load_data()
+            self.historical_players, self.historical_teams, self.historical_players_quarters, self.historical_teams_quarters = data_loader.load_data()
             
             # Cargar modelo PTS usando joblib directo
             model_path = "app/architectures/basketball/.joblib/pts_model.joblib"
-            logger.info(f"🤖 Cargando modelo PTS completo desde: {model_path}")
+            logger.info(f" Cargando modelo PTS completo desde: {model_path}")
             
             import joblib
             self.model = joblib.load(model_path)
-            logger.info("✅ Modelo PTS cargado como objeto completo")
+            logger.info(" Modelo PTS cargado como objeto completo")
             
             # Verificar que se cargó correctamente
             if hasattr(self.model, 'stacking_model') and self.model.stacking_model is not None:
-                logger.info("✅ Modelo PTS completo cargado correctamente")
+                logger.info(" Modelo PTS completo cargado correctamente")
             else:
                 raise ValueError("Modelo PTS no se cargó correctamente")
             
@@ -104,7 +104,7 @@ class PTSPredictor:
             return True
             
         except Exception as e:
-            logger.error(f"❌ Error cargando datos y modelo: {e}")
+            logger.error(f" Error cargando datos y modelo: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -130,7 +130,7 @@ class PTSPredictor:
             
             # 2. VERIFICAR SI EL JUGADOR ESTÁ EN EL ROSTER Y DISPONIBLE
             if target_player not in available_players:
-                logger.info(f"❌ {target_player} no disponible en el roster")
+                logger.info(f" {target_player} no disponible en el roster")
                 return None
             
             # 3. CONVERTIR DATOS DE SPORTRADAR CON GAMEADAPTER
@@ -140,7 +140,7 @@ class PTSPredictor:
             target_row = self.common_utils._smart_player_search(players_df, target_player)
             
             if target_row.empty:
-                logger.warning(f"❌ Jugador {target_player} no encontrado en datos convertidos")
+                logger.warning(f" Jugador {target_player} no encontrado en datos convertidos")
                 return None
             
             # 5. EXTRAER DATOS DEL JUGADOR
@@ -166,9 +166,9 @@ class PTSPredictor:
                 opponent_team = home_team_abbr
                 opponent_team_id = game_data.get('homeTeam', {}).get('teamId', '')
             else:
-                # Fallback a datos históricos si no coincide
-                opponent_team = player_data.get('Opp', 'Unknown')
-                opponent_team_id = ''
+                error_msg = f"No se pudo determinar el oponente para {target_player}: equipo actual {current_team_abbr} no coincide con home ({home_team_abbr}) ni away ({away_team_abbr})"
+                logger.error(f" {error_msg}")
+                return None
             
             # Agregar información extraída al player_data
             player_data['is_home'] = is_home
@@ -189,11 +189,11 @@ class PTSPredictor:
             prediction_result = self.predict_single_player(player_data, game_data)
             
             if prediction_result is None:
-                logger.info(f"⚠️  Predicción no realizada, es menor a 5 points")
+                logger.info(f"  Predicción no realizada, es menor a 5 points")
                 return None
             
             if 'error' in prediction_result:
-                logger.error(f"❌ Error en predicción interna: {prediction_result['error']}")
+                logger.error(f" Error en predicción interna: {prediction_result['error']}")
                 return None
             
             # 9. EXTRAER RESULTADOS DE LA PREDICCIÓN
@@ -219,7 +219,7 @@ class PTSPredictor:
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en predicción desde SportRadar: {e}")
+            logger.error(f" Error en predicción desde SportRadar: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -246,79 +246,109 @@ class PTSPredictor:
             player_historical_df = self.common_utils._smart_player_search(self.historical_players, player_name)
             
             if player_historical_df.empty:
-                logger.warning(f"⚠️ No se encontraron datos históricos para {player_name}")
-                # Usar datos de jugadores similares o promedio
-                player_historical = self.historical_players.head(100).copy()
-            else:
-                player_historical = player_historical_df.copy()
-                logger.info(f"✅ Encontrados {len(player_historical)} registros históricos para {player_name}")
+                error_msg = f"No se encontraron datos históricos para {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
             
-            # Intentar usar datos del equipo actual primero, si no hay suficientes usar historial completo
+            player_historical = player_historical_df.copy()
+            logger.info(f" Encontrados {len(player_historical)} registros históricos para {player_name}")
+            
+            # Verificar mínimo de datos requerido
+            if len(player_historical) < 5:
+                error_msg = f"Datos insuficientes para {player_name}: solo {len(player_historical)} juegos (mínimo requerido: 5)"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            # Usar datos del equipo actual SIEMPRE que sea posible
             current_team = player_data.get('current_team', 'Unknown')
-            if len(player_historical) > 0 and current_team != 'Unknown':
+            if current_team != 'Unknown':
                 current_team_data = player_historical[player_historical['Team'] == current_team]
                 if len(current_team_data) >= 5:  # Mínimo 5 juegos con el equipo actual
                     player_historical = current_team_data.copy()
-                    logger.info(f"🏀 Usando {len(player_historical)} registros del equipo actual ({current_team}) para {player_name}")
+                    logger.info(f" Usando {len(player_historical)} registros del equipo actual ({current_team}) para {player_name}")
                 else:
-                    # Si no hay suficientes datos del equipo actual, usar TODOS los datos históricos
-                    logger.info(f"📅 Pocos datos de {current_team} ({len(current_team_data)} juegos), usando TODOS los {len(player_historical)} registros históricos para {player_name}")
+                    error_msg = f"Datos insuficientes del equipo actual {current_team} para {player_name}: solo {len(current_team_data)} juegos (mínimo requerido: 5)"
+                    logger.error(f" {error_msg}")
+                    return {'error': error_msg}
             else:
-                logger.info(f"🏀 Usando TODOS los {len(player_historical)} registros históricos para {player_name} (sin filtro por equipo)")
+                logger.info(f" Usando TODOS los {len(player_historical)} registros históricos para {player_name}")
             
             # Hacer predicción con el modelo usando solo datos históricos
+            logger.info(f"  Generando predicción con modelo...")
+            logger.debug(f"    - Registros históricos para predicción: {len(player_historical)}")
+            logger.debug(f"    - Features disponibles: {len(player_historical.columns)}")
+            
             predictions = self.model.predict(player_historical)
             
-            # Extraer la última predicción (corresponde al último juego histórico)
-            raw_prediction = predictions[-1] if len(predictions) > 0 else 0
+            logger.debug(f"    - Predicciones generadas: {len(predictions)}")
             
-            # CALCULAR MÉTRICAS DETALLADAS PARA CONFIANZA Y PREDICTION_DETAILS
-            if len(player_historical) > 0:
-                historical_pts = player_historical['points'].dropna()
-                actual_stats_mean = historical_pts.mean() if len(historical_pts) > 0 else raw_prediction
-                actual_stats_std = historical_pts.std() if len(historical_pts) > 1 else 1.0
-                prediction_std = 1.5  # Estimación conservadora para modelo PTS
-                
-                # ESTADÍSTICAS DETALLADAS PARA PREDICTION_DETAILS
-                # Últimos 5 juegos
-                last_5_games = historical_pts.tail(5) if len(historical_pts) >= 5 else historical_pts
-                last_5_mean = last_5_games.mean() if len(last_5_games) > 0 else 0
-                last_5_std = last_5_games.std() if len(last_5_games) > 1 else 0
-                last_5_min = last_5_games.min() if len(last_5_games) > 0 else 0
-                last_5_max = last_5_games.max() if len(last_5_games) > 0 else 0
-                
-                # Últimos 10 juegos
-                last_10_games = historical_pts.tail(10) if len(historical_pts) >= 10 else historical_pts
-                last_10_mean = last_10_games.mean() if len(last_10_games) > 0 else 0
-                last_10_std = last_10_games.std() if len(last_10_games) > 1 else 0
-                last_10_min = last_10_games.min() if len(last_10_games) > 0 else 0
-                last_10_max = last_10_games.max() if len(last_10_games) > 0 else 0
+            if len(predictions) == 0:
+                error_msg = f"Modelo no generó predicciones para {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            if len(predictions) > 0:
+                logger.debug(f"    - Predicciones (primeras 5): {predictions[:5].tolist()}")
+                logger.debug(f"    - Predicciones (últimas 5): {predictions[-5:].tolist()}")
+            
+            # Extraer la última predicción (corresponde al último juego histórico)
+            raw_prediction = predictions[-1]
+            logger.info(f"    - raw_prediction seleccionada (última): {raw_prediction:.2f}")
+            
+            # CALCULAR MÉTRICAS DETALLADAS PARA CONFIANZA Y PREDICTION_DETAILS (SIN FALLBACKS)
+            if 'points' not in player_historical.columns:
+                error_msg = f"Columna 'points' no encontrada en datos históricos de {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            historical_pts = player_historical['points'].dropna()
+            
+            if len(historical_pts) < 5:
+                error_msg = f"Datos insuficientes de puntos para {player_name}: solo {len(historical_pts)} juegos válidos (mínimo requerido: 5)"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            actual_stats_mean = historical_pts.mean()
+            actual_stats_std = historical_pts.std() if len(historical_pts) > 1 else 1.0
+            prediction_std = 1.5  # Estimación conservadora para modelo PTS
+            
+            # ESTADÍSTICAS DETALLADAS PARA PREDICTION_DETAILS
+            # Últimos 5 juegos
+            last_5_games = historical_pts.tail(5)
+            last_5_mean = last_5_games.mean()
+            last_5_std = last_5_games.std() if len(last_5_games) > 1 else 0
+            last_5_min = last_5_games.min()
+            last_5_max = last_5_games.max()
+            
+            # Últimos 10 juegos
+            if len(historical_pts) >= 10:
+                last_10_games = historical_pts.tail(10)
+                last_10_mean = last_10_games.mean()
+                last_10_std = last_10_games.std()
+                last_10_min = last_10_games.min()
+                last_10_max = last_10_games.max()
                 
                 # Tendencia (diferencia entre últimos 5 vs anteriores 5)
-                if len(historical_pts) >= 10:
-                    recent_5 = historical_pts.tail(5).mean()
-                    previous_5 = historical_pts.tail(10).head(5).mean()
-                    trend_5_games = recent_5 - previous_5
-                else:
-                    trend_5_games = 0
-                
-                # Consistencia (inversa de la desviación estándar)
-                consistency_score = max(0, 100 - (actual_stats_std * 2)) if actual_stats_std > 0 else 100
-                
-                # Forma reciente (últimos 3 juegos)
-                last_3_games = historical_pts.tail(3) if len(historical_pts) >= 3 else historical_pts
-                recent_form = last_3_games.mean() if len(last_3_games) > 0 else 0
-                
+                recent_5 = historical_pts.tail(5).mean()
+                previous_5 = historical_pts.tail(10).head(5).mean()
+                trend_5_games = recent_5 - previous_5
             else:
-                actual_stats_mean = raw_prediction
-                actual_stats_std = 3.0
-                prediction_std = 2.0
-                # Valores por defecto para estadísticas detalladas
-                last_5_mean = last_5_std = last_5_min = last_5_max = 0
-                last_10_mean = last_10_std = last_10_min = last_10_max = 0
+                # Si hay menos de 10 juegos, usar todos los disponibles para last_10
+                last_10_mean = actual_stats_mean
+                last_10_std = actual_stats_std
+                last_10_min = historical_pts.min()
+                last_10_max = historical_pts.max()
                 trend_5_games = 0
-                consistency_score = 50
-                recent_form = 0
+            
+            # Consistencia (inversa de la desviación estándar)
+            consistency_score = max(0, 100 - (actual_stats_std * 2)) if actual_stats_std > 0 else 100
+            
+            # Forma reciente (últimos 3 juegos)
+            if len(historical_pts) >= 3:
+                last_3_games = historical_pts.tail(3)
+                recent_form = last_3_games.mean()
+            else:
+                recent_form = actual_stats_mean
             
             # CALCULAR PREDICCIÓN ESTABILIZADA PARA CONFIANZA
             stabilized_prediction = (raw_prediction * 0.70) + (actual_stats_mean * 0.30)
@@ -348,21 +378,26 @@ class PTSPredictor:
                 target_stat='points'  # Estadística objetivo: puntos
             )
             
-            # APLICAR FACTOR H2H A LA PREDICCIÓN CON LÍMITE REALISTA
-            h2h_factor = h2h_stats.get('h2h_factor', 1.0)
-            if h2h_factor != 1.0 and h2h_stats.get('games_found', 0) >= 3:
+            # APLICAR FACTOR H2H A LA PREDICCIÓN (SOLO SI HAY DATOS SUFICIENTES)
+            h2h_factor = h2h_stats.get('h2h_factor', None)
+            h2h_games = h2h_stats.get('games_found', 0)
+            
+            if h2h_factor is not None and h2h_games >= 3:
                 # Si hay suficientes datos H2H, aplicar el factor
                 raw_prediction_adjusted = raw_prediction * h2h_factor
-                logger.info(f"🎯 Aplicando factor H2H {h2h_factor:.3f} a predicción: {raw_prediction:.1f} -> {raw_prediction_adjusted:.1f}")
+                logger.info(f" Aplicando factor H2H {h2h_factor:.3f} a predicción: {raw_prediction:.1f} -> {raw_prediction_adjusted:.1f} (basado en {h2h_games} juegos H2H)")
             else:
+                # Si no hay suficientes datos H2H, NO AJUSTAR (sin fallback a 1.0)
                 raw_prediction_adjusted = raw_prediction
+                if h2h_games < 3:
+                    logger.warning(f" No se aplica factor H2H: solo {h2h_games} juegos H2H encontrados (mínimo requerido: 3)")
             
             # APLICAR TOLERANCIA INDIVIDUAL DEL PREDICTOR
             pts_prediction = max(0, raw_prediction_adjusted + self.tolerance)  # No permitir valores negativos
             
             # No inferir predicciones menores a 5 PTS
             if pts_prediction < 5:
-                logger.info(f"⚠️  Predicción {pts_prediction:.1f} PTS < 5, no se infiere (casas de apuestas manejan líneas ≥5)")
+                logger.info(f"  Predicción {pts_prediction:.1f} PTS < 5, no se infiere (casas de apuestas manejan líneas ≥5)")
                 return None
             
             return {
@@ -426,7 +461,7 @@ class PTSPredictor:
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en predicción: {e}")
+            logger.error(f" Error en predicción: {e}")
             import traceback
             traceback.print_exc()
             return {
@@ -438,52 +473,118 @@ class PTSPredictor:
 
 def test_pts_predictor():
     """Función de prueba rápida del predictor PTS"""
-    print("🧪 PROBANDO PTS PREDICTOR")
-    print("="*50)
+    print(" PROBANDO PTS PREDICTOR - KNICKS VS CAVALIERS")
+    print("="*60)
     
     # Inicializar predictor
     predictor = PTSPredictor()
     
     # Cargar datos y modelo
-    print("📂 Cargando datos y modelo...")
+    print(" Cargando datos y modelo...")
     if not predictor.load_data_and_model():
-        print("❌ Error cargando modelo")
+        print(" Error cargando modelo")
         return False
     
-    # Prueba con datos simulados de SportRadar
-    print("\n🎯 Prueba con datos simulados de SportRadar:")
-    
-    # Simular datos de SportRadar con Denver vs Orlando Magic
+    # Simular datos de SportRadar: Knicks vs Cavaliers
     mock_sportradar_game = {
-        "gameId": "sr:match:12345",
-        "scheduled": "2024-01-15T20:00:00Z",
+        "gameId": "sr:match:knicks_cavs_20250124",
+        "scheduled": "2025-01-24T19:30:00Z",
         "status": "scheduled",
         "homeTeam": {
-            "name": "Denver Nuggets",
-            "alias": "DEN",
+            "name": "New York Knicks",
+            "alias": "NYK",
             "players": [
                 {
-                    "playerId": "sr:player:jokic",
-                    "fullName": "Nikola Jokic",
+                    "playerId": "sr:player:brunson",
+                    "fullName": "Jalen Brunson",
+                    "position": "PG",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "11",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:towns",
+                    "fullName": "Karl-Anthony Towns",
                     "position": "C",
                     "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "15",
+                    "jerseyNumber": "32",
                     "injuries": []
                 },
                 {
-                    "playerId": "sr:player:murray",
-                    "fullName": "Jamal Murray",
-                    "position": "G",
+                    "playerId": "sr:player:anunoby",
+                    "fullName": "OG Anunoby",
+                    "position": "SF",
                     "starter": True,
                     "status": "ACT",
-                    "jerseyNumber": "27",
+                    "jerseyNumber": "8",
                     "injuries": []
                 },
                 {
-                    "playerId": "sr:player:porter",
-                    "fullName": "Michael Porter Jr.",
-                    "position": "F",
+                    "playerId": "sr:player:hart",
+                    "fullName": "Josh Hart",
+                    "position": "SG",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "3",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:robinson",
+                    "fullName": "Mitchell Robinson",
+                    "position": "C",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "23",
+                    "injuries": []
+                }
+            ]
+        },
+        "awayTeam": {
+            "name": "Cleveland Cavaliers", 
+            "alias": "CLE",
+            "players": [
+                {
+                    "playerId": "sr:player:mitchell",
+                    "fullName": "Donovan Mitchell",
+                    "position": "SG",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "45",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:garland",
+                    "fullName": "Darius Garland",
+                    "position": "PG",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "10",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:mobley",
+                    "fullName": "Evan Mobley",
+                    "position": "PF",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "4",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:allen",
+                    "fullName": "Jarrett Allen",
+                    "position": "C",
+                    "starter": True,
+                    "status": "ACT",
+                    "jerseyNumber": "31",
+                    "injuries": []
+                },
+                {
+                    "playerId": "sr:player:strus",
+                    "fullName": "Max Strus",
+                    "position": "SF",
                     "starter": True,
                     "status": "ACT",
                     "jerseyNumber": "1",
@@ -491,109 +592,70 @@ def test_pts_predictor():
                 }
             ]
         },
-        "awayTeam": {
-            "name": "Orlando Magic", 
-            "alias": "ORL",
-            "players": [
-                {
-                    "playerId": "sr:player:banchero",
-                    "fullName": "Paolo Banchero",
-                    "position": "F",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "5",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:wagner",
-                    "fullName": "Franz Wagner",
-                    "position": "F",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "22",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:suggs",
-                    "fullName": "Jalen Suggs",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "4",
-                    "injuries": []
-                }
-            ]
-        },
         "venue": {
-            "name": "Paycom Center",
-            "capacity": 18203
+            "name": "Madison Square Garden",
+            "capacity": 19812
         }
     }
     
-    # Probar predicción desde SportRadar
-    print("   Prediciendo Nikola Jokic desde datos SportRadar:")
-    sportradar_result = predictor.predict_game(
-        mock_sportradar_game, 
-        "Nikola Jokic"
-    )
+    # Función para convertir numpy types a Python types
+    def convert_numpy_types(obj):
+        if hasattr(obj, 'item'):
+            return obj.item()
+        elif isinstance(obj, dict):
+            return {k: convert_numpy_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_numpy_types(v) for v in obj]
+        return obj
     
-    if sportradar_result is not None:
-        print("   ✅ Resultado SportRadar (formato JSON exacto):")
-        import json
+    import json
+    
+    # Predecir para todos los jugadores del mockup
+    print("\n" + "="*60)
+    print("PREDICCIONES PARA TODOS LOS JUGADORES")
+    print("="*60)
+    
+    all_players = []
+    
+    # Jugadores de Knicks (home)
+    for player in mock_sportradar_game["homeTeam"]["players"]:
+        all_players.append((player["fullName"], "NYK"))
+    
+    # Jugadores de Cavaliers (away)
+    for player in mock_sportradar_game["awayTeam"]["players"]:
+        all_players.append((player["fullName"], "CLE"))
+    
+    # Realizar predicciones
+    predictions_made = 0
+    predictions_failed = 0
+    
+    for i, (player_name, team) in enumerate(all_players, 1):
+        print(f"\n{i}. {player_name} ({team}):")
+        print("-" * 50)
         
-        # Convertir numpy types a Python types para JSON
-        def convert_numpy_types(obj):
-            if hasattr(obj, 'item'):
-                return obj.item()
-            elif isinstance(obj, dict):
-                return {k: convert_numpy_types(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [convert_numpy_types(v) for v in obj]
-            return obj
-        
-        result_clean = convert_numpy_types(sportradar_result)
-        print(json.dumps(result_clean, indent=4, ensure_ascii=False))
-    else:
-        print("   ⚠️ No se hizo predicción (jugador no disponible o error)")
-    
-    # Probar búsqueda inteligente con nombres problemáticos
-    print("\n🧠 Pruebas de búsqueda inteligente:")
-    
-    # Casos para probar regla de predicciones < 5 PTS
-    test_cases = [
-        ("Shai Gilgeous-Alexander", "Elite OKC"),
-        ("Chet Holmgren", "Promedio OKC"),
-        ("Isaiah Joe", "Suplente OKC"),
-        ("Luka Doncic", "Elite DAL"),
-        ("P.J. Washington", "Promedio DAL"),
-        ("Kyrie Irving", "Elite DAL (datos problemáticos)"),
-        ("LeBron James", "Jugador inexistente")
-    ]
-    
-    for i, (player_name, description) in enumerate(test_cases, 1):
-        print(f"   {i}. {description}: '{player_name}'")
         result = predictor.predict_game(mock_sportradar_game, player_name)
         
-        if result is not None:
-            print(f"      ✅ Predicción exitosa:")
-            import json
-            
-            # Convertir numpy types a Python types para JSON
-            def convert_numpy_types(obj):
-                if hasattr(obj, 'item'):
-                    return obj.item()
-                elif isinstance(obj, dict):
-                    return {k: convert_numpy_types(v) for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [convert_numpy_types(v) for v in obj]
-                return obj
-            
+        if result is not None and 'error' not in result:
             result_clean = convert_numpy_types(result)
-            print(json.dumps(result_clean, indent=8, ensure_ascii=False))
-    else:
-            print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
+            print(json.dumps(result_clean, indent=2, ensure_ascii=False))
+            predictions_made += 1
+        else:
+            if result and 'error' in result:
+                print(f"   ERROR: {result['error']}")
+            else:
+                print(f"   No se pudo generar predicción")
+            predictions_failed += 1
     
-    print("\n✅ Prueba completada")
+    # Resumen final
+    print("\n" + "="*60)
+    print("RESUMEN DE PREDICCIONES")
+    print("="*60)
+    print(f" Total jugadores: {len(all_players)}")
+    print(f" Predicciones exitosas: {predictions_made}")
+    print(f" Predicciones fallidas: {predictions_failed}")
+    print(f" Tasa de éxito: {(predictions_made/len(all_players)*100):.1f}%")
+    print("="*60)
+    
     return True
 
 

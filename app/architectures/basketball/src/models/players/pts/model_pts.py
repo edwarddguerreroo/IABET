@@ -732,8 +732,8 @@ class StackingPTSModel:
         logger.info(f"Fecha de corte seleccionada: {split_date}")
         
         # División temporal basada en fecha de corte
-        train_df = df_sorted[df_sorted['Date'] < split_date].copy()
-        test_df = df_sorted[df_sorted['Date'] >= split_date].copy()
+        train_df = df_sorted[df_sorted['Date'] < split_date].copy().reset_index(drop=True)
+        test_df = df_sorted[df_sorted['Date'] >= split_date].copy().reset_index(drop=True)
         
         # Verificar que la división fue exitosa
         if len(train_df) == 0:
@@ -751,11 +751,11 @@ class StackingPTSModel:
         
         # Verificación crítica: asegurar orden cronológico
         if train_df['Date'].max() >= test_df['Date'].min():
-            logger.warning("⚠️  ADVERTENCIA: Posible solapamiento temporal detectado")
+            logger.warning("  ADVERTENCIA: Posible solapamiento temporal detectado")
             # Mostrar fechas problemáticas
             overlap_train = train_df[train_df['Date'] >= test_df['Date'].min()]
             if len(overlap_train) > 0:
-                logger.warning(f"⚠️  {len(overlap_train)} registros de entrenamiento en fechas de test")
+                logger.warning(f"  {len(overlap_train)} registros de entrenamiento en fechas de test")
         
         return train_df, test_df
     
@@ -784,13 +784,14 @@ class StackingPTSModel:
         else:
             logger.warning("Columna 'Date' no encontrada - no se puede verificar orden cronológico")
         
-        # Generar características directamente
+
+        # Generar características en datos filtrados
         logger.info("Generando características especializadas...")
         feature_names = self.feature_engineer.generate_all_features(df)
         self.selected_features = feature_names
         self.feature_names = feature_names
         
-        # División temporal
+        # División temporal en datos originales
         train_df, test_df = self._temporal_split(df)
         
         # Preparar datos de entrenamiento
@@ -826,7 +827,7 @@ class StackingPTSModel:
         if len(numeric_cols) == 0:
             raise ValueError("No hay columnas numéricas disponibles para entrenamiento")
         
-        # 🔧 CRÍTICO: Entrenar el scaler con los datos de entrenamiento
+        # Entrenar el scaler con los datos de entrenamiento
         logger.info("Entrenando StandardScaler...")
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_test_scaled = self.scaler.transform(X_test)
@@ -888,7 +889,7 @@ class StackingPTSModel:
         if not hasattr(self, 'trained_base_models') or not hasattr(self, 'meta_learner'):
             raise ValueError("Modelo no entrenado. Ejecutar train() primero.")
         
-        # Generar features (modificar DataFrame directamente)
+        # Generar features en datos filtrados
         features = self.feature_engineer.generate_all_features(df)
         
         # Determinar expected_features dinámicamente del modelo entrenado
@@ -1020,7 +1021,7 @@ class StackingPTSModel:
             # Fallback: solo redondear y limitar
             predictions = np.maximum(predictions, 0)
             return np.round(np.clip(predictions, 0, 60)).astype(int)
-    
+
     def save_model(self, filepath: str):
         """
         Guardar modelo entrenado COMPLETO con todos los componentes OOF.

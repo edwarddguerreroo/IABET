@@ -2,10 +2,12 @@
 import logging
 import uuid
 from datetime import datetime
+import json
 
 from app.models.game import Game
 from app.models.prediction import PredictionResponse
 from app.architectures.basketball.main import NBAPredict
+from app.core.redis_config import RedisClient
 
 logger = logging.getLogger(__name__)
 
@@ -16,29 +18,21 @@ class ModelService:
         # self.model = load_your_model(path=settings.MODEL_PATH)
         self.model = None
 
-    def predict(self, game: Game):
+    def predict(self, game: Game, redis: RedisClient):
         """
         Genera predicciones usando NBAPredict.
         Convierte el objeto Game a formato SportRadar y pasa los datos a NBAPredict.
         """
         try:
-            # Debug: verificar los valores del objeto Game
-            logger.info(f"🔍 Debug ModelService - gameId: {game.gameId}")
-            logger.info(f"🔍 Debug ModelService - homeTeam.name: '{game.homeTeam.name}' (tipo: {type(game.homeTeam.name)})")
-            logger.info(f"🔍 Debug ModelService - awayTeam.name: '{game.awayTeam.name}' (tipo: {type(game.awayTeam.name)})")
-            logger.info(f"🔍 Debug ModelService - homeTeam.record: {game.homeTeam.record}")
-            logger.info(f"🔍 Debug ModelService - awayTeam.record: {game.awayTeam.record}")
-            
+
             # Convertir objeto Game a formato SportRadar
             game_data = self._convert_game_to_sportradar(game)
-            logger.info(f"🔄 Datos convertidos: {type(game_data)}")
-            logger.info(f"🔍 Debug convertido - homeTeam.name: '{game_data['homeTeam']['name']}'")
-            logger.info(f"🔍 Debug convertido - awayTeam.name: '{game_data['awayTeam']['name']}'")
-            
+            logger.info(f" Datos convertidos: {type(game_data)}")
+
             # Inicializar el predictor NBA y pasar los datos convertidos
             models = NBAPredict()
             result = models.predict(game_data)
-            
+            redis.rpush('predictions:nba', json.dumps(result))
             return result
             
         except Exception as e:
@@ -49,9 +43,9 @@ class ModelService:
         """
         Convierte objeto Game de Pydantic a formato SportRadar.
         """
-        logger.info("🔄 Convirtiendo objeto Game de Pydantic a formato SportRadar")
-        logger.info(f"🔍 Debug - homeTeam.name: {data.homeTeam.name}")
-        logger.info(f"🔍 Debug - awayTeam.name: {data.awayTeam.name}")
+        logger.info(" Convirtiendo objeto Game de Pydantic a formato SportRadar")
+        logger.info(f" Debug - homeTeam.name: {data.homeTeam.name}")
+        logger.info(f" Debug - awayTeam.name: {data.awayTeam.name}")
         
         return {
             'gameId': data.gameId,
@@ -89,6 +83,7 @@ class ModelService:
                     } for injury in player.injuries]
                 } for player in data.homeTeam.players]
             },
+            
             'awayTeam': {
                 'teamId': data.awayTeam.teamId,
                 'name': data.awayTeam.name,

@@ -656,7 +656,6 @@ class TeamPointsModel:
         Returns:
             DataFrame filtrado con datos de calidad
         """
-        logger.info("Aplicando filtros de calidad de datos...")
         
         # 1. EQUIPOS PROBLEMÁTICOS YA ELIMINADOS DEL DATASET
         df_filtered = df.copy()
@@ -684,10 +683,7 @@ class TeamPointsModel:
             
             # Mostrar algunos ejemplos de outliers
             outliers_sample = df_filtered[outliers_mask][['Team', 'Date', 'points']].head(5)
-            logger.info("Ejemplos de outliers eliminados:")
-            for _, row in outliers_sample.iterrows():
-                logger.info(f"  {row['Team']} {row['Date']}: {row['points']} puntos")
-            
+
             df_filtered = df_filtered[~outliers_mask].copy()
         else:
             logger.info("No se encontraron outliers extremos en puntos")
@@ -736,6 +732,7 @@ class TeamPointsModel:
         # FILTRAR EQUIPOS PROBLEMÁTICOS Y OUTLIERS
         logger.info("Aplicando filtros de calidad de datos...")
         df_clean = self._apply_data_quality_filters(df)
+        df_clean = df_clean.reset_index(drop=True)  # Garantizar índices continuos
         logger.info(f"Datos filtrados: {len(df)} → {len(df_clean)} registros ({len(df)-len(df_clean)} eliminados)")
         
         # Generar características
@@ -982,8 +979,8 @@ class TeamPointsModel:
                 importances = np.ones(len(self.selected_features)) / len(self.selected_features)
                 logger.warning("Aplicando importancia uniforme para todas las features")
             
-            # SIEMPRE asignar selected_features
-                selected_features = self.selected_features
+            # SIEMPRE asignar selected_features (FUERA del if)
+            selected_features = self.selected_features
             
             # Crear DataFrame de importancia
             feature_df = pd.DataFrame({

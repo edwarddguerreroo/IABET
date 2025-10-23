@@ -625,7 +625,7 @@ class Stacking3PTModel:
             if not df['Date'].is_monotonic_increasing:
                 logger.info("Ordenando datos cronológicamente...")
                 df = df.sort_values(['player', 'Date']).reset_index(drop=True)
-        
+
         # Generar features especializadas para triples
         logger.info("Generando características especializadas...")
         features = self.feature_engineer.generate_all_features(df)  # Modificar DataFrame directamente
@@ -1135,7 +1135,7 @@ class Stacking3PTModel:
         """
         if not hasattr(self, 'trained_base_models') or not hasattr(self, 'meta_learner'):
             raise ValueError("Modelo no entrenado. Ejecutar train() primero.")
-        
+
         # Generar features (modificar DataFrame directamente)
         features = self.feature_engineer.generate_all_features(df)
         
@@ -1339,7 +1339,7 @@ class Stacking3PTModel:
         except Exception as e:
             logger.warning(f"Error en calibración 3PT: {e}")
             return predictions
-
+    
     def _apply_robust_prediction_processing(self, predictions: np.ndarray) -> np.ndarray:
         """
         Aplica procesamiento robusto de predicciones para manejo de outliers y valores enteros.

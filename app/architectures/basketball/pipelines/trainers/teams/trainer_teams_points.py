@@ -99,7 +99,6 @@ class TeamsPointsTrainer:
         # Crear directorio de salida con manejo robusto
         try:
             os.makedirs(self.output_dir, exist_ok=True)
-            logger.info(f"Directorio de salida creado/verificado: {self.output_dir}")
         except Exception as e:
             logger.error(f"Error creando directorio {self.output_dir}: {e}")
             # Crear directorio alternativo en caso de error
@@ -138,10 +137,10 @@ class TeamsPointsTrainer:
         logger.info("Cargando datos NBA")
         
         # Cargar datos usando el data loader
-        self.df, self.teams_df = self.data_loader.load_data()
+        self.df, self.teams_df, players_quarters, self.teams_quarters_df = self.data_loader.load_data()
         
         # Cargar datasets adicionales de equipos
-        self.teams_total_df, self.teams_quarters_df = self.data_loader.load_data(use_quarters=True)
+        self.teams_total_df = self.teams_df
         
         # Actualizar el modelo con todos los datasets
         self.model = TeamPointsModel(
@@ -156,8 +155,8 @@ class TeamsPointsTrainer:
         teams_data = self.teams_df.copy()
         
         # Verificar que existe la columna target
-        if 'PTS' not in teams_data.columns:
-            raise ValueError("Columna 'PTS' no encontrada en datos de equipos")
+        if 'points' not in teams_data.columns:
+            raise ValueError("Columna 'points' no encontrada en datos de equipos")
         
         # Estadísticas básicas de los datos
         logger.info(f"Datos cargados: {len(teams_data)} registros de equipos")
@@ -165,7 +164,7 @@ class TeamsPointsTrainer:
         logger.info(f"Rango de fechas: {teams_data['Date'].min()} a {teams_data['Date'].max()}")
         
         # Estadísticas del target
-        pts_stats = teams_data['PTS'].describe()
+        pts_stats = teams_data['points'].describe()
         logger.info(f"Estadísticas PTS por equipo:")
         logger.info(f"  | Media: {pts_stats['mean']:.1f}")
         logger.info(f"  | Mediana: {pts_stats['50%']:.1f}")
@@ -227,7 +226,7 @@ class TeamsPointsTrainer:
             test_data = self.df[self.df['Date'] >= self.model.cutoff_date].copy()
             if len(test_data) > 0:
                 test_indices = test_data.index
-                y_true = test_data['PTS'].values
+                y_true = test_data['points'].values
                 y_pred = self.predictions[test_indices] if len(self.predictions) == len(self.df) else self.predictions[:len(y_true)]
                 
                 # Ajustar dimensiones si es necesario
@@ -444,7 +443,7 @@ MODELOS BASE:
     
     def _plot_target_distribution_compact(self, ax):
         """Distribución compacta del target PTS."""
-        pts_values = self.df['PTS']
+        pts_values = self.df['points']
         
         # Histograma
         ax.hist(pts_values, bins=25, alpha=0.7, color='lightcoral', edgecolor='black')
@@ -472,11 +471,11 @@ MODELOS BASE:
         
         # Usar datos filtrados para consistencia con las predicciones
         if hasattr(self, 'df_filtered'):
-            y_true = self.df_filtered['PTS'].values
+            y_true = self.df_filtered['points'].values
             y_pred = self.predictions
         else:
             # Fallback: usar datos originales con ajuste de dimensiones
-            y_true = self.df['PTS'].values
+            y_true = self.df['points'].values
             y_pred = self.predictions
             # Ajustar dimensiones si es necesario
             min_len = min(len(y_true), len(y_pred))
@@ -512,11 +511,11 @@ MODELOS BASE:
         
         # Calcular residuos usando datos filtrados
         if hasattr(self, 'df_filtered'):
-            y_true = self.df_filtered['PTS'].values
+            y_true = self.df_filtered['points'].values
             y_pred = self.predictions
         else:
             # Fallback: usar datos originales con ajuste de dimensiones
-            y_true = self.df['PTS'].values
+            y_true = self.df['points'].values
             y_pred = self.predictions
             # Ajustar dimensiones si es necesario
             min_len = min(len(y_true), len(y_pred))
@@ -549,11 +548,11 @@ MODELOS BASE:
         
         # Obtener datos usando datos filtrados
         if hasattr(self, 'df_filtered'):
-            y_true = self.df_filtered['PTS'].values
+            y_true = self.df_filtered['points'].values
             y_pred = self.predictions
         else:
             # Fallback: usar datos originales con ajuste de dimensiones
-            y_true = self.df['PTS'].values
+            y_true = self.df['points'].values
             y_pred = self.predictions
             # Ajustar dimensiones si es necesario
             min_len = min(len(y_true), len(y_pred))
@@ -599,7 +598,7 @@ MODELOS BASE:
         """Análisis compacto de top equipos ofensivos."""
         # Obtener promedio de puntos por equipo
         team_stats = self.df.groupby('Team').agg({
-            'PTS': ['mean', 'count']
+            'points': ['mean', 'count']
         }).reset_index()
         
         team_stats.columns = ['Team', 'mean', 'count']
@@ -634,12 +633,12 @@ MODELOS BASE:
         df_copy['month'] = pd.to_datetime(df_copy['Date']).dt.to_period('M')
         
         monthly_stats = df_copy.groupby('month').agg({
-            'PTS': 'mean'
+            'points': 'mean'
         }).reset_index()
         
         if len(monthly_stats) > 0:
             months = [str(m) for m in monthly_stats['month']]
-            avg_pts = monthly_stats['PTS']
+            avg_pts = monthly_stats['points']
             
             ax.plot(months, avg_pts, marker='o', linewidth=2, markersize=4)
             
@@ -968,20 +967,20 @@ MODELOS BASE:
                 "🚨 CRÍTICO: Reducir complejidad del modelo",
                 "📉 Incrementar regularización en hiperparámetros",
                 "🔧 Considerar feature selection más agresiva",
-                "⚖️ Probar ensemble más simple (menos modelos base)"
+                " Probar ensemble más simple (menos modelos base)"
             ])
         elif overfitting_analysis['severity'] == 'medium':
             recommendations.extend([
-                "⚠️ Ajustar regularización de hiperparámetros",
-                "🎯 Evaluar feature selection",
-                "📊 Monitorear en producción"
+                " Ajustar regularización de hiperparámetros",
+                " Evaluar feature selection",
+                " Monitorear en producción"
             ])
         
         # Recomendaciones generales
         recommendations.extend([
             "📈 Implementar features de player availability",
             "😴 Agregar features de fatiga (back-to-back games)",
-            "🏀 Incorporar features de estilo de juego del oponente",
+            " Incorporar features de estilo de juego del oponente",
             "📉 Considerar target engineering (log transform, etc.)"
         ])
         
@@ -1013,16 +1012,16 @@ MODELOS BASE:
         # Guardar predicciones usando datos filtrados
         if self.predictions is not None:
             if hasattr(self, 'df_filtered'):
-                predictions_df = self.df_filtered[['Team', 'Date', 'Opp', 'PTS']].copy()
+                predictions_df = self.df_filtered[['Team', 'Date', 'Opp', 'points']].copy()
             else:
-                predictions_df = self.df[['Team', 'Date', 'Opp', 'PTS']].copy()
+                predictions_df = self.df[['Team', 'Date', 'Opp', 'points']].copy()
                 # Ajustar dimensiones si es necesario
                 min_len = min(len(predictions_df), len(self.predictions))
                 predictions_df = predictions_df.iloc[:min_len]
                 self.predictions = self.predictions[:min_len]
             
-            predictions_df['PTS_predicted'] = self.predictions
-            predictions_df['error'] = self.predictions - predictions_df['PTS']
+            predictions_df['points_predicted'] = self.predictions
+            predictions_df['error'] = self.predictions - predictions_df['points']
             predictions_df['abs_error'] = np.abs(predictions_df['error'])
             
             predictions_path = os.path.normpath(os.path.join(self.output_dir, 'predictions.csv'))

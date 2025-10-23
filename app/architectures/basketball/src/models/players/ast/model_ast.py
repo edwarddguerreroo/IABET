@@ -182,15 +182,15 @@ class StackingASTModel:
             split_idx = int(len(df) * (1 - test_size))
             return df.iloc[:split_idx].copy(), df.iloc[split_idx:].copy()
         
-        # Ordenar por fecha
-        df_sorted = df.sort_values('Date').reset_index(drop=True)
+        # Ordenar por fecha y jugador para consistencia
+        df_sorted = df.sort_values(['Date', 'player']).reset_index(drop=True)
         
         # Encontrar punto de corte temporal
         split_idx = int(len(df_sorted) * (1 - test_size))
         cutoff_date = df_sorted.iloc[split_idx]['Date']
         
-        train_data = df_sorted[df_sorted['Date'] < cutoff_date].copy()
-        test_data = df_sorted[df_sorted['Date'] >= cutoff_date].copy()
+        train_data = df_sorted[df_sorted['Date'] < cutoff_date].copy().reset_index(drop=True)
+        test_data = df_sorted[df_sorted['Date'] >= cutoff_date].copy().reset_index(drop=True)
         
         logger.info(f"División temporal: {len(train_data)} entrenamiento, {len(test_data)} prueba")
         logger.info(f"Fecha corte: {cutoff_date}")
@@ -367,10 +367,11 @@ class StackingASTModel:
             if not df['Date'].is_monotonic_increasing:
                 logger.info("Ordenando datos cronológicamente...")
                 df = df.sort_values(['player', 'Date']).reset_index(drop=True)
-        
+
+
         # Generar features especializadas para asistencias
         logger.info("Generando características especializadas...")
-        all_features = self.feature_engineer.generate_all_features(df)  # Modificar DataFrame directamente
+        all_features = self.feature_engineer.generate_all_features(df)  # Usar datos filtrados
         
         if not all_features:
             raise ValueError("No se pudieron generar features para AST")
@@ -395,7 +396,7 @@ class StackingASTModel:
         X_test = test_data[features].fillna(0)
         y_test = test_data['assists']
         
-        # 🔧 CRÍTICO: Entrenar el scaler con los datos de entrenamiento
+        # Entrenar el scaler con los datos de entrenamiento
         logger.info("Entrenando StandardScaler...")
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_test_scaled = self.scaler.transform(X_test)
@@ -572,7 +573,6 @@ class StackingASTModel:
         
         return study.best_params
     
-    
     def _perform_temporal_cross_validation(self, X_train: pd.DataFrame, y_train: pd.Series):
         """Realizar validación cruzada temporal para evaluar estabilidad"""
         
@@ -671,7 +671,6 @@ class StackingASTModel:
         self.feature_importance = dict(
             sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)
         )
-        
     
     def _apply_elite_assist_calibration(self, predictions: np.ndarray, df: pd.DataFrame) -> np.ndarray:
         """
@@ -894,7 +893,7 @@ class StackingASTModel:
                 predictions_int[i] = floor_val + np.random.binomial(1, prob)
             
             # 4. Aplicar límites finales para asistencias (más permisivo)
-            predictions_int = np.clip(predictions_int, 0, 25)
+            predictions_int = np.clip(predictions_int, 0, 112)
             
             return predictions_int.astype(int)
             
@@ -902,8 +901,8 @@ class StackingASTModel:
             logger.warning(f"Error en procesamiento robusto: {e}")
             # Fallback: solo redondear y limitar
             predictions = np.maximum(predictions, 0)
-            return np.round(np.clip(predictions, 0, 25)).astype(int)
-    
+            return np.round(np.clip(predictions, 0, 12)).astype(int)
+
     def predict(self, df: pd.DataFrame) -> np.ndarray:
         """
         Realizar predicciones usando el modelo entrenado con escalamiento post-predicción
@@ -916,7 +915,12 @@ class StackingASTModel:
         """
         if not hasattr(self, 'trained_base_models') or not self.trained_base_models:
             raise ValueError("Modelo no entrenado. Ejecutar train() primero.")
-        
+
+        # Verificar orden cronológico
+        if 'Date' in df.columns:
+            if not df['Date'].is_monotonic_increasing:
+                logger.info("Ordenando datos cronológicamente...")
+                df = df.sort_values(['player', 'Date']).reset_index(drop=True)
         # Generar features (modificar DataFrame directamente)
         logger.info("Generando features para predicción...")
         all_features = self.feature_engineer.generate_all_features(df)
@@ -948,18 +952,11 @@ class StackingASTModel:
         logger.info(f"Features ordenadas para predicción: {len(features)}")
         
         X = df[features].fillna(0)
-        
-        # 🔧 CRÍTICO: Aplicar escalado antes de predicción
-        if hasattr(self, 'scaler') and self.scaler is not None:
-            try:
-                X_scaled = self.scaler.transform(X)
-                X = pd.DataFrame(X_scaled, columns=features, index=X.index)
-                logger.debug("✅ Datos escalados aplicados para predicción AST")
-            except Exception as e:
-                logger.warning(f"⚠️ Error aplicando scaler AST: {e}, usando datos sin escalar")
-        else:
-            logger.warning("⚠️ Scaler AST no disponible, usando datos sin escalar")
-        
+
+        # Aplicar el scaler antes de predecir (igual que en entrenamiento)
+        X_scaled = self.scaler.transform(X)
+        X = pd.DataFrame(X_scaled, columns=features, index=X.index)
+
         # Validar datos para predicción
         self._validate_training_data(X, pd.Series([0] * len(X)))
         
@@ -1038,7 +1035,7 @@ class StackingASTModel:
                 n_jobs=1,
                 passthrough=True
             )
-            logger.info("✅ StackingRegressor creado para compatibilidad con predictor AST")
+            logger.info(" StackingRegressor creado para compatibilidad con predictor AST")
 
 class XGBoostASTModel:
     """

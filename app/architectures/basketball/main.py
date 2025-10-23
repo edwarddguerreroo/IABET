@@ -48,6 +48,8 @@ from app.architectures.basketball.pipelines.trainers.teams.trainer_teams_points 
 
 # Import del predictor unificado
 from app.architectures.basketball.pipelines.predict.unified_predictor.unified_predictor import UnifiedPredictor
+# Import del orquestador completo (GamePredictor)
+from app.architectures.basketball.pipelines.game_predictor import GamePredictor
 
 # Import locales
 from app.models.game import Game
@@ -175,7 +177,7 @@ class NBATrainers:
                     teams_quarters_path=self.teams_quarters_path,
                     biometrics_path=self.biometrics_path,
                     output_dir=config['output_dir'],
-                    n_optimization_trials=self.n_trials,
+                    n_trials=self.n_trials,
                     random_state=self.random_state
                 )
             else:
@@ -449,8 +451,13 @@ class NBAPredict:
     """
     Sistema Unificado de Predicción NBA - Punto de Inicialización
     
-    Clase principal para recibir el insumo del juego (Game) y orquestar
-    todas las predicciones del sistema NBA usando el UnifiedPredictor.
+    Clase principal para recibir el insumo del juego (Game) y generar
+    predicciones usando UnifiedPredictor directamente.
+    
+    UnifiedPredictor ejecuta:
+    1. Modelos de jugadores (PTS, AST, TRB, 3PT, DD)
+    2. Modelos de equipos (Teams Points, Halftime Points)
+    3. Devuelve predicciones consolidadas
     """
     
     def __init__(self, auto_load: bool = True):
@@ -460,60 +467,86 @@ class NBAPredict:
         Args:
             auto_load: Si cargar automáticamente los modelos al inicializar
         """
-        logger.info("🚀 Inicializando NBAPredict...")
+        logger.info(" Inicializando NBAPredict con UnifiedPredictor...")
         
-        # Inicializar predictor unificado
-        self.unified_predictor = UnifiedPredictor()
-        self.predictors_loaded = False
-        
-        # Cargar modelos si se solicita
-        if auto_load:
-            self.load_models()
+        # Inicializar UnifiedPredictor directamente
+        try:
+            self.unified_predictor = UnifiedPredictor()
+            self.unified_predictor.load_all_models()
+            self.predictors_loaded = True
+            logger.info(" UnifiedPredictor inicializado exitosamente")
+        except Exception as e:
+            logger.error(f" Error inicializando UnifiedPredictor: {e}")
+            self.unified_predictor = None
+            self.predictors_loaded = False
+            raise
     
     def load_models(self) -> bool:
         """
         Carga todos los modelos del sistema.
         
+        NOTA: Los modelos ya se cargan automáticamente en __init__()
+        Este método se mantiene por compatibilidad.
+        
         Returns:
-            bool: True si todos los modelos se cargaron exitosamente
+            bool: True si todos los modelos están cargados
         """
-        try:
-            logger.info("📂 Cargando todos los modelos del sistema...")
-            
-            if self.unified_predictor.load_all_models():
-                self.predictors_loaded = True
-                logger.info("✅ Todos los modelos cargados exitosamente")
-                return True
-            else:
-                logger.error("❌ Error cargando algunos modelos")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Error cargando modelos: {e}")
+        if self.unified_predictor is not None and self.predictors_loaded:
+            logger.info(" Modelos ya cargados en UnifiedPredictor")
+            return True
+        else:
+            logger.error(" UnifiedPredictor no está inicializado correctamente")
             return False
     
-    def predict(self, data: Union[Dict[str, Any], List[Dict[str, Any]]]) -> Dict[str, Any]:
+    def predict(
+        self, 
+        data: Union[Dict[str, Any], List[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
         """
-        Punto de entrada principal para predicciones.
-        Maneja tanto un solo juego como múltiples juegos usando UnifiedPredictor.
-        Espera datos ya convertidos a formato SportRadar.
+        Punto de entrada principal para predicciones usando UnifiedPredictor.
+        
+        Usa UnifiedPredictor que ejecuta:
+        1. Modelos de jugadores → PTS, AST, TRB, 3PT, Double-Double
+        2. Modelos de equipos → Teams Points, Halftime Points
+        
+        Args:
+            data: Juego(s) en formato SportRadar (dict o lista de dicts)
+        
+        Returns:
+            Dict con:
+            - game_info: Información del juego
+            - team_predictions: Predicciones de equipos
+            - player_predictions: Predicciones de jugadores
+            - summary: Resumen de predicciones
         """
         try:
-            # Validar que los modelos estén cargados
-            if not self.predictors_loaded:
-                logger.warning("⚠️ Modelos no cargados. Intentando cargar...")
-                if not self.load_models():
-                    return {'error': 'No se pudieron cargar los modelos', 'status': 'error'}
+            # Validar que UnifiedPredictor esté inicializado
+            if not self.predictors_loaded or self.unified_predictor is None:
+                logger.error(" UnifiedPredictor no está inicializado")
+                return {
+                    'error': 'UnifiedPredictor no está inicializado',
+                    'status': 'error',
+                    'success': False
+                }
             
-            # Usar el método unificado de UnifiedPredictor
-            result = self.unified_predictor.predict(data)
+            # Asegurar que data sea una lista
+            games_data = data if isinstance(data, list) else [data]
             
-            # Limpiar datos numpy para serialización JSON usando función existente
+            # Usar UnifiedPredictor directamente
+            logger.info(f" Prediciendo {len(games_data)} juego(s) con UnifiedPredictor...")
+            result = self.unified_predictor.predict(data=games_data)
+            
+            # Limpiar datos numpy para serialización JSON
             return convert_numpy_types(result)
             
         except Exception as e:
-            logger.error(f"❌ Error en predicción: {e}")
-            return {'error': str(e), 'status': 'error'}
+            logger.error(f" Error en predicción: {e}")
+            logger.error(traceback.format_exc())
+            return {
+                'error': str(e),
+                'status': 'error',
+                'success': False
+            }
     
     
 

@@ -129,7 +129,7 @@ class DLTrainer:
         """
         # Filtrar columnas de features (excluir target y metadatos)
         feature_cols = [col for col in df.columns 
-                       if col not in ['AST', 'Player', 'Date', 'Team', 'Opp']]
+                       if col not in ['assists', 'player', 'date', 'team', 'Opp']]
         
         # Filtrar solo columnas numéricas
         numeric_cols = []
@@ -145,7 +145,7 @@ class DLTrainer:
         
         # Extraer features y target
         X = df[numeric_cols].values
-        y = df['AST'].values.reshape(-1, 1)
+        y = df['assists'].values.reshape(-1, 1)
         
         # Manejar valores NaN
         from sklearn.impute import SimpleImputer
@@ -717,3 +717,17 @@ class DLTrainer:
             edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous().to(self.device)
         
         return edge_index
+
+def main():
+    """Función principal para probar el trainer."""
+    # Cargar datos de ejemplo
+    df = pd.read_csv('data/example_ast_data.csv')
+    
+    # Crear configuración
+    config = (BasketballTransformer)
+    
+    # Crear trainer
+    trainer = DLTrainer(config, model_type="transformer")
+    
+    # Entrenar y guardar modelo
+    trainer.train(df, save_path="models/ast_transformer.pth")

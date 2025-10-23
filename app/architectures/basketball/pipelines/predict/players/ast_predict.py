@@ -70,7 +70,7 @@ class ASTPredictor:
         self.common_utils = CommonUtils()
         self.confidence_calculator = PlayersConfidence()
         self.is_loaded = False
-        self.tolerance = -2  # Tolerancia conservadora individual
+        self.tolerance = 0  # Tolerancia conservadora individual
 
         # Cargar datos y modelo automáticamente
         self.load_data_and_model()
@@ -92,15 +92,14 @@ class ASTPredictor:
                 teams_quarters_path="app/architectures/basketball/data/teams_quarters.csv",
                 biometrics_path="app/architectures/basketball/data/biometrics.csv"
             )
-            self.historical_players, self.historical_teams = data_loader.load_data()
+            self.historical_players, self.historical_teams, self.historical_players_quarters, self.historical_teams_quarters = data_loader.load_data()
             
             # Inicializar modelo AST completo (wrapper)
-            logger.info("🤖 Inicializando modelo AST completo (wrapper)...")
             self.model = XGBoostASTModel(teams_df=self.historical_teams)
             
             # Cargar modelo entrenado
             model_path = "app/architectures/basketball/.joblib/ast_model.joblib"
-            logger.info(f"📦 Cargando modelo desde: {model_path}")
+            logger.info(f" Cargando modelo desde: {model_path}")
             self.model.load_model(model_path)
             
             self.is_loaded = True
@@ -108,7 +107,7 @@ class ASTPredictor:
             return True
             
         except Exception as e:
-            logger.error(f"❌ Error cargando datos y modelo: {e}")
+            logger.error(f" Error cargando datos y modelo: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -152,7 +151,7 @@ class ASTPredictor:
             available_players = self.confidence_calculator.filter_available_players_from_roster(game_data)
             
             if target_player not in available_players:
-                logger.info(f"❌ {target_player} no disponible en el roster")
+                logger.info(f" {target_player} no disponible en el roster")
                 return None
      
             # Extraer información adicional desde SportRadar
@@ -175,9 +174,9 @@ class ASTPredictor:
                 opponent_team = home_team_abbr
                 opponent_team_id = game_data.get('homeTeam', {}).get('teamId', '')
             else:
-                # Fallback a datos históricos si no coincide
-                opponent_team = player_data.get('Opp', 'Unknown')
-                opponent_team_id = ''
+                error_msg = f"No se pudo determinar el oponente para {target_player}: equipo actual {current_team_abbr} no coincide con home ({home_team_abbr}) ni away ({away_team_abbr})"
+                logger.error(f" {error_msg}")
+                return None
            
             # Agregar información extraída al player_data
             player_data['is_home'] = is_home
@@ -198,11 +197,11 @@ class ASTPredictor:
             prediction_result = self.predict_single_player(player_data, game_data)
             
             if prediction_result is None:
-                logger.info(f"⚠️  Predicción no realizada, es menor a 4 asistencias")
+                logger.info(f"  Predicción no realizada, es menor a 4 asistencias")
                 return None
-            
+
             if 'error' in prediction_result:
-                logger.error(f"❌ Error en predicción interna: {prediction_result['error']}")
+                logger.error(f" Error en predicción interna: {prediction_result['error']}")
                 return None
             
             # Extraer predicción y confianza
@@ -227,7 +226,7 @@ class ASTPredictor:
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en predicción desde SportRadar: {e}")
+            logger.error(f" Error en predicción desde SportRadar: {e}")
             return {'error': f'Error procesando datos de SportRadar: {str(e)}'}
     
     def predict_single_player(self, player_data: Dict[str, Any], game_data: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -257,71 +256,99 @@ class ASTPredictor:
             player_historical = self.common_utils._smart_player_search(self.historical_players, player_name)
             
             if len(player_historical) == 0:
-                logger.warning(f"⚠️ No se encontraron datos históricos para {player_name}")
-                # Usar datos de jugadores similares o promedio
-                player_historical = self.historical_players.head(100).copy()
-            else:
-                logger.info(f"✅ Encontrados {len(player_historical)} registros históricos para {player_name}")
+                error_msg = f"No se encontraron datos históricos para {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
             
-            # Intentar usar datos del equipo actual primero, si no hay suficientes usar historial completo
-            current_team = player_data.get('current_team', 'Unknown')
-            if len(player_historical) > 0 and current_team != 'Unknown':
+            logger.info(f" Encontrados {len(player_historical)} registros históricos para {player_name}")
+            
+            # Verificar mínimo de datos requerido
+            if len(player_historical) < 5:
+                error_msg = f"Datos insuficientes para {player_name}: solo {len(player_historical)} juegos (mínimo requerido: 5)"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            # Usar datos del equipo actual SIEMPRE que sea posible
+            if current_team != 'Unknown':
                 current_team_data = player_historical[player_historical['Team'] == current_team]
                 if len(current_team_data) >= 5:  # Mínimo 5 juegos con el equipo actual
                     player_historical = current_team_data.copy()
-                    logger.info(f"🏀 Usando {len(player_historical)} registros del equipo actual ({current_team}) para {player_name}")
+                    logger.info(f" Usando {len(player_historical)} registros del equipo actual ({current_team}) para {player_name}")
                 else:
-                    # Si no hay suficientes datos del equipo actual, usar TODOS los datos históricos
-                    logger.info(f"📅 Pocos datos de {current_team} ({len(current_team_data)} juegos), usando TODOS los {len(player_historical)} registros históricos para {player_name}")
+                    error_msg = f"Datos insuficientes del equipo actual {current_team} para {player_name}: solo {len(current_team_data)} juegos (mínimo requerido: 5)"
+                    logger.error(f" {error_msg}")
+                    return {'error': error_msg}
             else:
-                logger.info(f"🏀 Usando TODOS los {len(player_historical)} registros históricos para {player_name} (sin filtro por equipo)")
+                logger.info(f" Usando TODOS los {len(player_historical)} registros históricos para {player_name}")
             
-            # 🎯 USAR SOLO DATOS HISTÓRICOS - Sin agregar fila de predicción
+            #  USAR SOLO DATOS HISTÓRICOS - Sin agregar fila de predicción
             combined_df = player_historical.copy()
             
             # Hacer predicción 
             predictions = self.model.predict(combined_df)
             
+            if len(predictions) == 0:
+                error_msg = f"Modelo no generó predicciones para {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
             # Extraer la última predicción (corresponde al último juego histórico, el más reciente)
-            if len(predictions) > 0:
-                raw_prediction = predictions[-1]
-                recent_predictions = predictions[-5:] if len(predictions) >= 5 else predictions
-            else:
-                raw_prediction = 0
-                recent_predictions = []
+            raw_prediction = predictions[-1]
+            recent_predictions = predictions[-5:] if len(predictions) >= 5 else predictions
+            
+            # CALCULAR MÉTRICAS DETALLADAS PARA CONFIANZA Y PREDICTION_DETAILS (SIN FALLBACKS)
+            if 'assists' not in player_historical.columns:
+                error_msg = f"Columna 'assists' no encontrada en datos históricos de {player_name}"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
+            historical_ast = player_historical['assists'].dropna()
+            
+            if len(historical_ast) < 5:
+                error_msg = f"Datos insuficientes de asistencias para {player_name}: solo {len(historical_ast)} juegos válidos (mínimo requerido: 5)"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
             
             # Calcular estadísticas para confianza
-            actual_stats_mean = player_historical['assists'].mean() if len(player_historical) > 0 else 0
-            actual_stats_std = player_historical['assists'].std() if len(player_historical) > 0 else 0
+            actual_stats_mean = historical_ast.mean()
+            actual_stats_std = historical_ast.std() if len(historical_ast) > 1 else 1.0
             prediction_std = np.std(recent_predictions) if len(recent_predictions) > 1 else 0
             
-            # CALCULAR ESTADÍSTICAS DETALLADAS PARA PREDICTION_DETAILS
+            # ESTADÍSTICAS DETALLADAS PARA PREDICTION_DETAILS
             # Últimos 5 juegos
-            last_5_games = player_historical.tail(5)['assists'] if len(player_historical) >= 5 else player_historical['assists']
+            last_5_games = historical_ast.tail(5)
             last_5_stats = {
-                'mean': round(last_5_games.mean(), 1) if len(last_5_games) > 0 else 0,
+                'mean': round(last_5_games.mean(), 1),
                 'std': round(last_5_games.std(), 1) if len(last_5_games) > 1 else 0,
-                'min': int(last_5_games.min()) if len(last_5_games) > 0 else 0,
-                'max': int(last_5_games.max()) if len(last_5_games) > 0 else 0,
+                'min': int(last_5_games.min()),
+                'max': int(last_5_games.max()),
                 'count': len(last_5_games)
             }
             
             # Últimos 10 juegos
-            last_10_games = player_historical.tail(10)['assists'] if len(player_historical) >= 10 else player_historical['assists']
-            last_10_stats = {
-                'mean': round(last_10_games.mean(), 1) if len(last_10_games) > 0 else 0,
-                'std': round(last_10_games.std(), 1) if len(last_10_games) > 1 else 0,
-                'min': int(last_10_games.min()) if len(last_10_games) > 0 else 0,
-                'max': int(last_10_games.max()) if len(last_10_games) > 0 else 0,
-                'count': len(last_10_games)
-            }
-            
-            # Análisis de tendencia
-            if len(player_historical) >= 5:
+            if len(historical_ast) >= 10:
+                last_10_games = historical_ast.tail(10)
+                last_10_stats = {
+                    'mean': round(last_10_games.mean(), 1),
+                    'std': round(last_10_games.std(), 1),
+                    'min': int(last_10_games.min()),
+                    'max': int(last_10_games.max()),
+                    'count': len(last_10_games)
+                }
+                
+                # Análisis de tendencia
                 recent_5_mean = last_5_games.mean()
-                recent_10_mean = last_10_games.mean() if len(player_historical) >= 10 else recent_5_mean
+                recent_10_mean = last_10_games.mean()
                 trend_5_games = recent_5_mean - recent_10_mean
             else:
+                # Si hay menos de 10 juegos, usar todos los disponibles
+                last_10_stats = {
+                    'mean': round(actual_stats_mean, 1),
+                    'std': round(actual_stats_std, 1),
+                    'min': int(historical_ast.min()),
+                    'max': int(historical_ast.max()),
+                    'count': len(historical_ast)
+                }
                 trend_5_games = 0
                 recent_5_mean = actual_stats_mean
             
@@ -329,7 +356,10 @@ class ASTPredictor:
             consistency_score = max(0, 100 - (actual_stats_std * 5)) if actual_stats_std > 0 else 100
             
             # Forma reciente (promedio de últimos 3 juegos)
-            recent_form = player_historical.tail(3)['assists'].mean() if len(player_historical) >= 3 else actual_stats_mean
+            if len(historical_ast) >= 3:
+                recent_form = historical_ast.tail(3).mean()
+            else:
+                recent_form = actual_stats_mean
             
             # CALCULAR ESTADÍSTICAS H2H DETALLADAS
             # Usar opponent_team del juego actual si está disponible, sino usar histórico
@@ -341,13 +371,19 @@ class ASTPredictor:
                 max_games=50
             )
             
-            # APLICAR FACTOR H2H A LA PREDICCIÓN
-            h2h_factor = h2h_stats.get('h2h_factor', 1.0)
-            if h2h_factor != 1.0 and h2h_stats.get('games_found', 0) >= 3:
+            # APLICAR FACTOR H2H A LA PREDICCIÓN (SOLO SI HAY DATOS SUFICIENTES)
+            h2h_factor = h2h_stats.get('h2h_factor', None)
+            h2h_games = h2h_stats.get('games_found', 0)
+            
+            if h2h_factor is not None and h2h_games >= 3:
+                # Si hay suficientes datos H2H, aplicar el factor
                 raw_prediction_adjusted = raw_prediction * h2h_factor
-                logger.info(f"🎯 Aplicando factor H2H {h2h_factor:.3f} a predicción AST: {raw_prediction:.1f} -> {raw_prediction_adjusted:.1f}")
+                logger.info(f" Aplicando factor H2H {h2h_factor:.3f} a predicción AST: {raw_prediction:.1f} -> {raw_prediction_adjusted:.1f} (basado en {h2h_games} juegos H2H)")
             else:
+                # Si no hay suficientes datos H2H, NO AJUSTAR (sin fallback a 1.0)
                 raw_prediction_adjusted = raw_prediction
+                if h2h_games < 3:
+                    logger.warning(f" No se aplica factor H2H: solo {h2h_games} juegos H2H encontrados (mínimo requerido: 3)")
             
             # Calcular confianza usando PlayersConfidence
             confidence_percentage = self.confidence_calculator.calculate_player_confidence(
@@ -367,9 +403,9 @@ class ASTPredictor:
             # Aplicar tolerancia individual del predictor
             ast_prediction = max(0, raw_prediction_adjusted + self.tolerance)  # self.tolerance es -2
             
-            # REGLA DE CASAS DE APUESTAS: No inferir predicciones menores a 4 AST
-            if ast_prediction < 4:
-                logger.info(f"⚠️  Predicción {ast_prediction:.1f} AST < 4, no se infiere (casas de apuestas manejan líneas ≥4)")
+            # REGLA DE CASAS DE APUESTAS: No inferir predicciones menores a 3 AST
+            if ast_prediction < 3:
+                logger.info(f"  Predicción {ast_prediction:.1f} AST < 3, no se infiere (casas de apuestas manejan líneas ≥3)")
                 return None
             
             return {
@@ -421,7 +457,7 @@ class ASTPredictor:
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en predicción: {e}")
+            logger.error(f" Error en predicción: {e}")
             import traceback
             traceback.print_exc()
             return {
@@ -433,199 +469,111 @@ class ASTPredictor:
 
 def test_ast_predictor():
     """Función de prueba rápida del predictor AST"""
-    print("🧪 PROBANDO AST PREDICTOR")
+    print(" PROBANDO AST PREDICTOR")
     print("="*50)
     
     # Inicializar predictor
     predictor = ASTPredictor()
     
     # Cargar datos y modelo
-    print("📂 Cargando datos y modelo...")
+    print(" Cargando datos y modelo...")
     if not predictor.load_data_and_model():
-        print("❌ Error cargando modelo")
+        print(" Error cargando modelo")
         return False
     
     # Prueba con datos simulados de SportRadar
-    print("\n🎯 Prueba con datos simulados de SportRadar:")
+    print("\n Prueba con datos simulados de SportRadar:")
     
-    # Simular datos de SportRadar con Nikola Jokić (Denver Nuggets)
+    # Simular datos de SportRadar para Knicks vs Cavaliers
     mock_sportradar_game = {
-        "gameId": "sr:match:12345",
-        "scheduled": "2024-01-15T20:00:00Z",
+        "gameId": "sr:match:knicks_cavs_20250124",
+        "scheduled": "2025-01-24T19:30:00Z",
         "status": "scheduled",
         "homeTeam": {
-            "name": "Oklahoma City Thunder",
-            "alias": "OKC",
+            "name": "New York Knicks",
+            "alias": "NYK",
             "players": [
-                {
-                    "playerId": "sr:player:123",
-                    "fullName": "Shai Gilgeous-Alexander",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "2",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:999",
-                    "fullName": "Chet Holmgren",
-                    "position": "C",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "7",
-                    "injuries": []
-                }
+                {"playerId": "sr:player:brunson", "fullName": "Jalen Brunson", "position": "PG", "starter": True, "status": "ACT", "jerseyNumber": "11", "injuries": []},
+                {"playerId": "sr:player:towns", "fullName": "Karl-Anthony Towns", "position": "C", "starter": True, "status": "ACT", "jerseyNumber": "32", "injuries": []},
+                {"playerId": "sr:player:anunoby", "fullName": "OG Anunoby", "position": "SF", "starter": True, "status": "ACT", "jerseyNumber": "8", "injuries": []},
+                {"playerId": "sr:player:hart", "fullName": "Josh Hart", "position": "SG", "starter": True, "status": "ACT", "jerseyNumber": "3", "injuries": []},
+                {"playerId": "sr:player:robinson", "fullName": "Mitchell Robinson", "position": "C", "starter": True, "status": "ACT", "jerseyNumber": "23", "injuries": []}
             ]
         },
         "awayTeam": {
-            "name": "Denver Nuggets", 
-            "alias": "DEN",
+            "name": "Cleveland Cavaliers", 
+            "alias": "CLE",
             "players": [
-                {
-                    "playerId": "sr:player:456",
-                    "fullName": "Nikola Jokić",
-                    "position": "C",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "15",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:789",
-                    "fullName": "Jamal Murray",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "27",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:888",
-                    "fullName": "Michael Porter Jr.",
-                    "position": "F",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "1",
-                    "injuries": []
-                }
+                {"playerId": "sr:player:mitchell", "fullName": "Donovan Mitchell", "position": "SG", "starter": True, "status": "ACT", "jerseyNumber": "45", "injuries": []},
+                {"playerId": "sr:player:garland", "fullName": "Darius Garland", "position": "PG", "starter": True, "status": "ACT", "jerseyNumber": "10", "injuries": []},
+                {"playerId": "sr:player:mobley", "fullName": "Evan Mobley", "position": "PF", "starter": True, "status": "ACT", "jerseyNumber": "4", "injuries": []},
+                {"playerId": "sr:player:allen", "fullName": "Jarrett Allen", "position": "C", "starter": True, "status": "ACT", "jerseyNumber": "31", "injuries": []},
+                {"playerId": "sr:player:strus", "fullName": "Max Strus", "position": "SF", "starter": True, "status": "ACT", "jerseyNumber": "1", "injuries": []}
             ]
         },
         "venue": {
-            "name": "Paycom Center",
-            "city": "Oklahoma City",
-            "state": "OK",
-            "capacity": 18118
+            "name": "Madison Square Garden",
+            "capacity": 19812
         }
     }
     
-    # Probar predicción desde SportRadar
-    print("   Prediciendo Nikola Jokić desde datos SportRadar:")
-    sportradar_result = predictor.predict_game(
-        mock_sportradar_game, 
-        "Nikola Jokić"
-    )
+    # Función auxiliar para convertir tipos numpy
+    def convert_numpy_types(obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {key: convert_numpy_types(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_numpy_types(item) for item in obj]
+        return obj
     
-    if sportradar_result is not None and 'error' not in sportradar_result:
-        print("   ✅ Resultado SportRadar (formato JSON exacto):")
-        # Convertir tipos numpy a tipos nativos de Python para JSON
-        def convert_numpy_types(obj):
-            if isinstance(obj, np.integer):
-                return int(obj)
-            elif isinstance(obj, np.floating):
-                return float(obj)
-            elif isinstance(obj, np.ndarray):
-                return obj.tolist()
-            elif isinstance(obj, dict):
-                return {key: convert_numpy_types(value) for key, value in obj.items()}
-            elif isinstance(obj, list):
-                return [convert_numpy_types(item) for item in obj]
-            return obj
+    # Probar predicción para todos los jugadores del juego
+    print("\nPREDICCIONES PARA TODOS LOS JUGADORES:\n")
+    
+    # Lista de todos los jugadores
+    all_players = []
+    for team_key in ['homeTeam', 'awayTeam']:
+        for player in mock_sportradar_game[team_key]['players']:
+            all_players.append(player['fullName'])
+    
+    print(f"Total jugadores a predecir: {len(all_players)}\n")
+    
+    successful_predictions = 0
+    failed_predictions = 0
+    
+    for idx, player_name in enumerate(all_players, 1):
+        print(f"\n{idx}. {player_name}:")
+        print("-" * 60)
         
-        sportradar_result_clean = convert_numpy_types(sportradar_result)
-        print(json.dumps(sportradar_result_clean, indent=4, ensure_ascii=False))
-    elif sportradar_result is None:
-        print("      ⚠️ No se hizo predicción (jugador no disponible)")
-    else:
-        print(f"   ❌ Error: {sportradar_result['error']}")
-        if 'available_players' in sportradar_result:
-            print(f"   Jugadores disponibles: {sportradar_result['available_players']}")
+        result = predictor.predict_game(mock_sportradar_game, player_name)
+        
+        if result is not None and 'error' not in result:
+            successful_predictions += 1
+            print(f"   [OK] PREDICCION EXITOSA")
+            result_clean = convert_numpy_types(result)
+            print(json.dumps(result_clean, indent=2, ensure_ascii=False))
+        elif result is None:
+            failed_predictions += 1
+            print(f"   [X] No se hizo prediccion (< 3 asistencias o jugador no disponible)")
+        else:
+            failed_predictions += 1
+            print(f"   [X] Error: {result.get('error', 'Error desconocido')}")
     
-    # Probar búsqueda inteligente con nombres problemáticos
-    print("\n🧠 Pruebas de búsqueda inteligente:")
+    # Resumen
+    print("\n" + "="*80)
+    print(" RESUMEN DE PREDICCIONES")
+    print("="*80)
+    print(f"Total jugadores: {len(all_players)}")
+    print(f"[OK] Predicciones exitosas: {successful_predictions}")
+    print(f"[X] Predicciones fallidas: {failed_predictions}")
+    print(f"Tasa de exito: {(successful_predictions/len(all_players)*100):.1f}%")
+    print("="*80)
     
-    # Caso 1: Jugador elite (Nikola Jokić)
-    print("   1. Búsqueda sin acento: 'Nikola Jokić' -> 'Nikola Jokic'")
-    jokic_result = predictor.predict_game(mock_sportradar_game, "Nikola Jokić")
-    if jokic_result is not None and 'error' not in jokic_result:
-        print(f"      ✅ Encontrado: {jokic_result['target_name']} -> bet_line: {jokic_result['bet_line']}")
-    elif jokic_result is None:
-        print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
-    else:
-        print(f"      ❌ Error: {jokic_result['error']}")
-    
-    # Caso 2: Jugador elite (Jamal Murray)
-    print("   2. Búsqueda sin acento: 'Jamal Murray' -> 'Jamal Murray'")
-    murray_result = predictor.predict_game(mock_sportradar_game, "Jamal Murray")
-    if murray_result is not None and 'error' not in murray_result:
-        print(f"      ✅ Encontrado: {murray_result['target_name']} -> bet_line: {murray_result['bet_line']}")
-    elif murray_result is None:
-        print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
-    else:
-        print(f"      ❌ Error: {murray_result['error']}")
-    
-    # Caso 3: Búsqueda case-insensitive
-    print("   3. Búsqueda case-insensitive: 'nikola jokic'")
-    jokic_lower_result = predictor.predict_game(mock_sportradar_game, "nikola jokic")
-    if jokic_lower_result is not None and 'error' not in jokic_lower_result:
-        print(f"      ✅ Encontrado: {jokic_lower_result['target_name']} -> bet_line: {jokic_lower_result['bet_line']}")
-    elif jokic_lower_result is None:
-        print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
-    else:
-        print(f"      ❌ Error: {jokic_lower_result['error']}")
-    
-    # Caso 4: Búsqueda parcial (solo apellido)
-    print("   4. Búsqueda parcial: 'Jokic'")
-    jokic_partial_result = predictor.predict_game(mock_sportradar_game, "Jokic")
-    if jokic_partial_result is not None and 'error' not in jokic_partial_result:
-        print(f"      ✅ Encontrado: {jokic_partial_result['target_name']} -> bet_line: {jokic_partial_result['bet_line']}")
-    elif jokic_partial_result is None:
-        print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
-    else:
-        print(f"      ❌ Error: {jokic_partial_result['error']}")
-    
-    # Caso 5: Jugador suplente (Michael Porter Jr.)
-    print("   5. Jugador suplente: 'Michael Porter Jr.' (starter: True)")
-    porter_result = predictor.predict_game(mock_sportradar_game, "Michael Porter Jr.")
-    if porter_result is not None and 'error' not in porter_result:
-        print(f"      ✅ Predicción exitosa:")
-        porter_result_clean = convert_numpy_types(porter_result)
-        print(json.dumps(porter_result_clean, indent=8, ensure_ascii=False))
-    elif porter_result is None:
-        print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
-    else:
-        print(f"      ❌ Error: {porter_result['error']}")
-    
-    # Caso 6: Jugador lesionado (status: INJ)
-    print("   6. Jugador lesionado: 'Russell Westbrook' (status: INJ)")
-    westbrook_result = predictor.predict_game(mock_sportradar_game, "Russell Westbrook")
-    if westbrook_result is None:
-        print(f"      ✅ Comportamiento esperado: No se hizo predicción para jugador lesionado")
-    else:
-        print(f"      ⚠️ Inesperado: Se hizo predicción para jugador lesionado: {westbrook_result}")
-    
-    # Caso 7: Jugador no existente (para probar sugerencias)
-    print("   7. Jugador inexistente: 'LeBron James'")
-    lebron_result = predictor.predict_game(mock_sportradar_game, "LeBron James")
-    if lebron_result is not None and 'error' in lebron_result:
-        print(f"      ❌ Error esperado: {lebron_result['error']}")
-        if 'similar_suggestions' in lebron_result:
-            print(f"      💡 Sugerencias: {lebron_result['similar_suggestions']}")
-    elif lebron_result is None:
-        print(f"      ⚠️ No se hizo predicción (jugador no disponible)")
-    else:
-        print(f"      ⚠️ Inesperado: {lebron_result}")
-    
-    print("\n✅ Prueba completada")
+    print("\nPrueba completada")
     return True
 
 

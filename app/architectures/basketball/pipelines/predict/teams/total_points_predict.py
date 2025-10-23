@@ -77,12 +77,12 @@ class TotalPointsPredictor:
             True si se cargó exitosamente
         """
         try:
-            logger.info("🔄 Total Points ahora usa predicciones de Teams Points...")
+            logger.info(" Total Points ahora usa predicciones de Teams Points...")
             
             # Cargar el predictor de equipos (PRINCIPAL)
-            logger.info("🏀 Cargando predictor de equipos...")
+            logger.info(" Cargando predictor de equipos...")
             if not self.teams_points_predictor.load_data_and_model():
-                logger.error("❌ Error cargando predictor de equipos")
+                logger.error(" Error cargando predictor de equipos")
                 return False
             
             # Cargar datos históricos para confianza
@@ -93,24 +93,24 @@ class TotalPointsPredictor:
                 teams_quarters_path="app/architectures/basketball/data/teams_quarters.csv",
                 biometrics_path="app/architectures/basketball/data/biometrics.csv"
             )
-            self.historical_players, self.historical_teams = data_loader.load_data()
+            self.historical_players, self.historical_teams, self.historical_players_quarters, self.historical_teams_quarters = data_loader.load_data()
             
             # Inicializar confidence_calculator con datos históricos
             self.confidence_calculator = TeamsConfidence()
             self.confidence_calculator.historical_teams = self.historical_teams
             self.confidence_calculator.historical_players = self.historical_players
-            logger.info("✅ Confidence calculator inicializado con datos históricos")
+            logger.info(" Confidence calculator inicializado con datos históricos")
             
             # Ya no necesitamos el modelo de total_points porque usamos teams_points
             self.model = None  # Será eliminado completamente
             
             self.is_loaded = True
-            logger.info("✅ Total Points predictor listo (basado en Teams Points)")
+            logger.info(" Total Points predictor listo (basado en Teams Points)")
             
             return True
             
         except Exception as e:
-            logger.error(f"❌ Error cargando datos y modelo: {e}")
+            logger.error(f" Error cargando datos y modelo: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -138,17 +138,17 @@ class TotalPointsPredictor:
             home_team = self.common_utils._get_team_abbreviation(home_team_name)
             away_team = self.common_utils._get_team_abbreviation(away_team_name)
             
-            logger.info(f"🔄 Calculando Total Points: {home_team_name} ({home_team}) vs {away_team_name} ({away_team})")
+            logger.info(f" Calculando Total Points: {home_team_name} ({home_team}) vs {away_team_name} ({away_team})")
             
             # PASO 1: Obtener predicciones de ambos equipos usando TeamsPointsPredictor
             teams_predictions = self.teams_points_predictor.predict_game(game_data)
             
             if isinstance(teams_predictions, dict) and 'error' in teams_predictions:
-                logger.error(f"❌ Error obteniendo predicciones de equipos: {teams_predictions['error']}")
+                logger.error(f" Error obteniendo predicciones de equipos: {teams_predictions['error']}")
                 return teams_predictions
             
             if not isinstance(teams_predictions, list) or len(teams_predictions) != 2:
-                logger.error(f"❌ Format inesperado de predicciones de equipos: {type(teams_predictions)}")
+                logger.error(f" Format inesperado de predicciones de equipos: {type(teams_predictions)}")
                 return {'error': 'Error: se esperaban 2 predicciones de equipos'}
             
             # PASO 2: Extraer puntos predichos de cada equipo
@@ -158,7 +158,7 @@ class TotalPointsPredictor:
             home_points = float(home_prediction.get('bet_line', 0))
             away_points = float(away_prediction.get('bet_line', 0))
             
-            logger.info(f"📊 Predicciones individuales: {home_team_name}={home_points}, {away_team_name}={away_points}")
+            logger.info(f" Predicciones individuales: {home_team_name}={home_points}, {away_team_name}={away_points}")
             
             # PASO 3: Sumar predicciones
             base_total = home_points + away_points
@@ -166,12 +166,18 @@ class TotalPointsPredictor:
             # PASO 4: Aplicar tolerancia conservadora específica para Total Points
             final_total = base_total + self.conservative_tolerance
             
-            # PASO 5: Calcular confianza promedio
-            home_confidence = home_prediction.get('confidence_percentage', 65.0)
-            away_confidence = away_prediction.get('confidence_percentage', 65.0)
+            # PASO 5: Calcular confianza promedio (SIN FALLBACKS)
+            home_confidence = home_prediction.get('confidence_percentage')
+            away_confidence = away_prediction.get('confidence_percentage')
+            
+            if home_confidence is None or away_confidence is None:
+                error_msg = "No se pudo obtener confianza de las predicciones de equipos"
+                logger.error(f" {error_msg}")
+                return {'error': error_msg}
+            
             avg_confidence = (home_confidence + away_confidence) / 2.0
             
-            logger.info(f"📊 Total Points calculado: {home_points} + {away_points} + ({self.conservative_tolerance}) = {final_total}")
+            logger.info(f" Total Points calculado: {home_points} + {away_points} + ({self.conservative_tolerance}) = {final_total}")
             
             # CALCULAR ESTADÍSTICAS DETALLADAS DE TOTALES HISTÓRICOS PARA PREDICTION_DETAILS
             # Estadísticas históricas de totales del equipo local
@@ -240,48 +246,48 @@ class TotalPointsPredictor:
                     "away_confidence": away_confidence,
                     "home_team_totals": {
                         "last_5_games": {
-                            "mean": round(np.mean(home_totals_last_5), 1) if home_totals_last_5 else 0,
-                            "std": round(np.std(home_totals_last_5), 1) if len(home_totals_last_5) > 1 else 0,
-                            "min": int(min(home_totals_last_5)) if home_totals_last_5 else 0,
-                            "max": int(max(home_totals_last_5)) if home_totals_last_5 else 0,
+                            "mean": round(np.mean(home_totals_last_5), 1) if len(home_totals_last_5) > 0 else None,
+                            "std": round(np.std(home_totals_last_5), 1) if len(home_totals_last_5) > 1 else None,
+                            "min": int(min(home_totals_last_5)) if len(home_totals_last_5) > 0 else None,
+                            "max": int(max(home_totals_last_5)) if len(home_totals_last_5) > 0 else None,
                             "count": len(home_totals_last_5)
                         },
                         "last_10_games": {
-                            "mean": round(np.mean(home_totals_last_10), 1) if home_totals_last_10 else 0,
-                            "std": round(np.std(home_totals_last_10), 1) if len(home_totals_last_10) > 1 else 0,
-                            "min": int(min(home_totals_last_10)) if home_totals_last_10 else 0,
-                            "max": int(max(home_totals_last_10)) if home_totals_last_10 else 0,
+                            "mean": round(np.mean(home_totals_last_10), 1) if len(home_totals_last_10) > 0 else None,
+                            "std": round(np.std(home_totals_last_10), 1) if len(home_totals_last_10) > 1 else None,
+                            "min": int(min(home_totals_last_10)) if len(home_totals_last_10) > 0 else None,
+                            "max": int(max(home_totals_last_10)) if len(home_totals_last_10) > 0 else None,
                             "count": len(home_totals_last_10)
                         }
                     },
                     "away_team_totals": {
                         "last_5_games": {
-                            "mean": round(np.mean(away_totals_last_5), 1) if away_totals_last_5 else 0,
-                            "std": round(np.std(away_totals_last_5), 1) if len(away_totals_last_5) > 1 else 0,
-                            "min": int(min(away_totals_last_5)) if away_totals_last_5 else 0,
-                            "max": int(max(away_totals_last_5)) if away_totals_last_5 else 0,
+                            "mean": round(np.mean(away_totals_last_5), 1) if len(away_totals_last_5) > 0 else None,
+                            "std": round(np.std(away_totals_last_5), 1) if len(away_totals_last_5) > 1 else None,
+                            "min": int(min(away_totals_last_5)) if len(away_totals_last_5) > 0 else None,
+                            "max": int(max(away_totals_last_5)) if len(away_totals_last_5) > 0 else None,
                             "count": len(away_totals_last_5)
                         },
                         "last_10_games": {
-                            "mean": round(np.mean(away_totals_last_10), 1) if away_totals_last_10 else 0,
-                            "std": round(np.std(away_totals_last_10), 1) if len(away_totals_last_10) > 1 else 0,
-                            "min": int(min(away_totals_last_10)) if away_totals_last_10 else 0,
-                            "max": int(max(away_totals_last_10)) if away_totals_last_10 else 0,
+                            "mean": round(np.mean(away_totals_last_10), 1) if len(away_totals_last_10) > 0 else None,
+                            "std": round(np.std(away_totals_last_10), 1) if len(away_totals_last_10) > 1 else None,
+                            "min": int(min(away_totals_last_10)) if len(away_totals_last_10) > 0 else None,
+                            "max": int(max(away_totals_last_10)) if len(away_totals_last_10) > 0 else None,
                             "count": len(away_totals_last_10)
                         }
                     },
                     "h2h_totals": {
                         "games_found": len(h2h_totals),
-                        "mean": round(np.mean(h2h_totals), 1) if h2h_totals else 0,
-                        "std": round(np.std(h2h_totals), 1) if len(h2h_totals) > 1 else 0,
-                        "min": int(min(h2h_totals)) if h2h_totals else 0,
-                        "max": int(max(h2h_totals)) if h2h_totals else 0
+                        "mean": round(np.mean(h2h_totals), 1) if len(h2h_totals) > 0 else None,
+                        "std": round(np.std(h2h_totals), 1) if len(h2h_totals) > 1 else None,
+                        "min": int(min(h2h_totals)) if len(h2h_totals) > 0 else None,
+                        "max": int(max(h2h_totals)) if len(h2h_totals) > 0 else None
                     }
                 }
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en predicción desde SportRadar: {e}")
+            logger.error(f" Error en predicción desde SportRadar: {e}")
             import traceback
             traceback.print_exc()
             return {'error': f'Error procesando datos de SportRadar: {str(e)}'}
@@ -289,162 +295,133 @@ class TotalPointsPredictor:
     
 def test_total_points_predictor():
     """Función de prueba rápida del predictor de total points"""
-    print("🧪 PROBANDO TOTAL POINTS PREDICTOR")
-    print("="*50)
+    print("="*80)
+    print(" PROBANDO TOTAL POINTS PREDICTOR - KNICKS VS CAVALIERS")
+    print("="*80)
     
     # Inicializar predictor
     predictor = TotalPointsPredictor()
     
     # Cargar datos y modelo
-    print("📂 Cargando datos y modelo...")
+    print("\n Cargando datos y modelo...")
     if not predictor.load_data_and_model():
-        print("❌ Error cargando modelo")
+        print(" Error cargando modelo")
         return False
     
-    # Prueba con datos simulados de SportRadar
-    print("\n🎯 Prueba con datos simulados de SportRadar:")
+    print("\n[OK] Modelo cargado exitosamente")
     
-    # Simular datos de SportRadar para Oklahoma vs Houston
+    # Prueba con datos simulados de SportRadar
+    print("\n" + "="*80)
+    print(" PRUEBA: KNICKS VS CAVALIERS - TOTAL PUNTOS DEL PARTIDO")
+    print("="*80)
+    
+    # Simular datos de SportRadar para Knicks vs Cavaliers
     mock_sportradar_game = {
-        "gameId": "sr:match:54321",
-        "scheduled": "2024-01-20T20:00:00Z",
+        "gameId": "sr:match:knicks_cavs_20250124",
+        "scheduled": "2025-01-24T19:30:00Z",
         "status": "scheduled",
         "homeTeam": {
-            "name": "Oklahoma City Thunder",
-            "alias": "OKC",
+            "name": "New York Knicks",
+            "alias": "NYK",
             "players": [
-                {
-                    "playerId": "sr:player:101",
-                    "fullName": "Shai Gilgeous-Alexander",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "2",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:102",
-                    "fullName": "Chet Holmgren",
-                    "position": "C",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "7",
-                    "injuries": []
-                }
+                {"playerId": "sr:player:brunson", "fullName": "Jalen Brunson", "position": "PG", "starter": True, "status": "ACT", "jerseyNumber": "11", "injuries": []},
+                {"playerId": "sr:player:towns", "fullName": "Karl-Anthony Towns", "position": "C", "starter": True, "status": "ACT", "jerseyNumber": "32", "injuries": []},
+                {"playerId": "sr:player:anunoby", "fullName": "OG Anunoby", "position": "SF", "starter": True, "status": "ACT", "jerseyNumber": "8", "injuries": []},
+                {"playerId": "sr:player:hart", "fullName": "Josh Hart", "position": "SG", "starter": True, "status": "ACT", "jerseyNumber": "3", "injuries": []},
+                {"playerId": "sr:player:robinson", "fullName": "Mitchell Robinson", "position": "C", "starter": True, "status": "ACT", "jerseyNumber": "23", "injuries": []}
             ]
         },
         "awayTeam": {
-            "name": "Houston Rockets", 
-            "alias": "HOU",
+            "name": "Cleveland Cavaliers", 
+            "alias": "CLE",
             "players": [
-                {
-                    "playerId": "sr:player:201",
-                    "fullName": "Alperen Şengün",
-                    "position": "C",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "28",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:202",
-                    "fullName": "Jalen Green",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "4",
-                    "injuries": []
-                },
-                {
-                    "playerId": "sr:player:203",
-                    "fullName": "Fred VanVleet",
-                    "position": "G",
-                    "starter": True,
-                    "status": "ACT",
-                    "jerseyNumber": "5",
-                    "injuries": []
-                }
+                {"playerId": "sr:player:mitchell", "fullName": "Donovan Mitchell", "position": "SG", "starter": True, "status": "ACT", "jerseyNumber": "45", "injuries": []},
+                {"playerId": "sr:player:garland", "fullName": "Darius Garland", "position": "PG", "starter": True, "status": "ACT", "jerseyNumber": "10", "injuries": []},
+                {"playerId": "sr:player:mobley", "fullName": "Evan Mobley", "position": "PF", "starter": True, "status": "ACT", "jerseyNumber": "4", "injuries": []},
+                {"playerId": "sr:player:allen", "fullName": "Jarrett Allen", "position": "C", "starter": True, "status": "ACT", "jerseyNumber": "31", "injuries": []},
+                {"playerId": "sr:player:strus", "fullName": "Max Strus", "position": "SF", "starter": True, "status": "ACT", "jerseyNumber": "1", "injuries": []}
             ]
         },
         "venue": {
-            "name": "Paycom Center",
-            "capacity": 18203
+            "name": "Madison Square Garden",
+            "capacity": 19812
         }
     }
     
     # Probar predicción desde SportRadar
-    print("   Prediciendo total points Oklahoma vs Houston:")
+    print("\nPrediciendo total puntos del partido:")
+    print("-" * 60)
+    print("Metodo: Suma de predicciones individuales de equipos")
     sportradar_result = predictor.predict_game(mock_sportradar_game)
     
+    import json
+    
     if 'error' not in sportradar_result:
-        print("   ✅ Resultado SportRadar (bet_line = predicción del modelo + confianza):")
-        for key, value in sportradar_result.items():
-            if key == 'confidence_percentage':
-                print(f"      {key}: {value}% 🎯")
-            else:
-                print(f"      {key}: {value}")
+        print(f"\n[OK] PREDICCION EXITOSA")
+        
+        # Información principal
+        total_points = sportradar_result['bet_line']
+        confidence = sportradar_result['confidence_percentage']
+        
+        print(f"\nTOTAL PUNTOS PREDICHO: {total_points}")
+        print(f"Confidence: {confidence}%")
+        print(f"Bet Type: {sportradar_result['bet_type']}")
+        
+        # Detalles de la predicción
+        if 'prediction_details' in sportradar_result:
+            details = sportradar_result['prediction_details']
+            
+            print(f"\nDETALLES DE LA PREDICCION:")
+            print(f"  Puntos equipo local: {details.get('home_points', 'N/A')}")
+            print(f"  Puntos equipo visitante: {details.get('away_points', 'N/A')}")
+            print(f"  Total base: {details.get('base_total', 'N/A')}")
+            print(f"  Tolerancia: {details.get('conservative_tolerance', 'N/A')}")
+            print(f"  Total final: {details.get('final_total', 'N/A')}")
+            
+            # Estadísticas históricas del equipo local
+            if 'home_team_totals' in details:
+                home_totals = details['home_team_totals']
+                print(f"\nESTADISTICAS EQUIPO LOCAL ({sportradar_result['home_team']}):")
+                print(f"  Ultimos 5 juegos: {home_totals['last_5_games']['mean']} puntos totales promedio")
+                print(f"  Rango: {home_totals['last_5_games']['min']}-{home_totals['last_5_games']['max']}")
+                print(f"  Ultimos 10 juegos: {home_totals['last_10_games']['mean']} puntos totales promedio")
+            
+            # Estadísticas históricas del equipo visitante
+            if 'away_team_totals' in details:
+                away_totals = details['away_team_totals']
+                print(f"\nESTADISTICAS EQUIPO VISITANTE ({sportradar_result['away_team']}):")
+                print(f"  Ultimos 5 juegos: {away_totals['last_5_games']['mean']} puntos totales promedio")
+                print(f"  Rango: {away_totals['last_5_games']['min']}-{away_totals['last_5_games']['max']}")
+                print(f"  Ultimos 10 juegos: {away_totals['last_10_games']['mean']} puntos totales promedio")
+            
+            # H2H
+            if 'h2h_totals' in details:
+                h2h = details['h2h_totals']
+                print(f"\nESTADISTICAS H2H:")
+                print(f"  Juegos encontrados: {h2h.get('games_found', 'N/A')}")
+                print(f"  Promedio H2H: {h2h.get('mean', 'N/A')} puntos totales")
+                print(f"  Rango: {h2h.get('min', 'N/A')}-{h2h.get('max', 'N/A')}")
+        
+        print(f"\nJSON COMPLETO:")
+        # Convertir numpy types a Python types para JSON serialization
+        def convert_numpy(obj):
+            if isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return obj
+        
+        print(json.dumps(sportradar_result, indent=2, ensure_ascii=False, default=convert_numpy))
+        
     else:
-        print(f"   ❌ Error: {sportradar_result['error']}")
-        if 'available_teams' in sportradar_result:
-            print(f"   Equipos disponibles: {sportradar_result['available_teams']}")
+        print(f"\n[ERROR] Error en prediccion")
+        print(f"Error: {sportradar_result['error']}")
     
-    # Mostrar detalles de la predicción
-    print(f"\n📊 Detalles de la predicción:")
-    print(f"   🏠 Equipo local: {sportradar_result.get('home_team', 'N/A')}")
-    print(f"   ✈️ Equipo visitante: {sportradar_result.get('away_team', 'N/A')}")
-    print(f"   🎯 Total predicho: {sportradar_result.get('bet_line', 'N/A')} puntos")
-    print(f"   📈 Confianza: {sportradar_result.get('confidence_percentage', 'N/A')}%")
-    
-    if 'prediction_details' in sportradar_result:
-        details = sportradar_result['prediction_details']
-        print(f"\n📋 Detalles técnicos:")
-        print(f"   🏠 Puntos equipo local: {details.get('home_points', 'N/A')}")
-        print(f"   ✈️ Puntos equipo visitante: {details.get('away_points', 'N/A')}")
-        print(f"   📊 Total base: {details.get('base_total', 'N/A')}")
-        print(f"   📈 Tolerancia conservadora: {details.get('conservative_tolerance', 'N/A')}")
-        print(f"   🎯 Total final: {details.get('final_total', 'N/A')}")
-        print(f"   🏠 Confianza local: {details.get('home_confidence', 'N/A')}%")
-        print(f"   ✈️ Confianza visitante: {details.get('away_confidence', 'N/A')}%")
-        
-        # Mostrar estadísticas de equipos
-        if 'home_team_totals' in details:
-            home_totals = details['home_team_totals']
-            print(f"\n🏠 Estadísticas equipo local (últimos 5 juegos):")
-            print(f"   📊 Promedio: {home_totals.get('last_5_games', {}).get('mean', 'N/A')}")
-            print(f"   📈 Desviación: {home_totals.get('last_5_games', {}).get('std', 'N/A')}")
-            print(f"   📊 Rango: {home_totals.get('last_5_games', {}).get('min', 'N/A')}-{home_totals.get('last_5_games', {}).get('max', 'N/A')}")
-            print(f"   🎮 Juegos: {home_totals.get('last_5_games', {}).get('count', 'N/A')}")
-            
-            print(f"\n🏠 Estadísticas equipo local (últimos 10 juegos):")
-            print(f"   📊 Promedio: {home_totals.get('last_10_games', {}).get('mean', 'N/A')}")
-            print(f"   📈 Desviación: {home_totals.get('last_10_games', {}).get('std', 'N/A')}")
-            print(f"   📊 Rango: {home_totals.get('last_10_games', {}).get('min', 'N/A')}-{home_totals.get('last_10_games', {}).get('max', 'N/A')}")
-            print(f"   🎮 Juegos: {home_totals.get('last_10_games', {}).get('count', 'N/A')}")
-        
-        if 'away_team_totals' in details:
-            away_totals = details['away_team_totals']
-            print(f"\n✈️ Estadísticas equipo visitante (últimos 5 juegos):")
-            print(f"   📊 Promedio: {away_totals.get('last_5_games', {}).get('mean', 'N/A')}")
-            print(f"   📈 Desviación: {away_totals.get('last_5_games', {}).get('std', 'N/A')}")
-            print(f"   📊 Rango: {away_totals.get('last_5_games', {}).get('min', 'N/A')}-{away_totals.get('last_5_games', {}).get('max', 'N/A')}")
-            print(f"   🎮 Juegos: {away_totals.get('last_5_games', {}).get('count', 'N/A')}")
-            
-            print(f"\n✈️ Estadísticas equipo visitante (últimos 10 juegos):")
-            print(f"   📊 Promedio: {away_totals.get('last_10_games', {}).get('mean', 'N/A')}")
-            print(f"   📈 Desviación: {away_totals.get('last_10_games', {}).get('std', 'N/A')}")
-            print(f"   📊 Rango: {away_totals.get('last_10_games', {}).get('min', 'N/A')}-{away_totals.get('last_10_games', {}).get('max', 'N/A')}")
-            print(f"   🎮 Juegos: {away_totals.get('last_10_games', {}).get('count', 'N/A')}")
-        
-        # Mostrar estadísticas H2H si están disponibles
-        if 'h2h_totals' in details:
-            h2h = details['h2h_totals']
-            print(f"\n🥊 Estadísticas Head-to-Head:")
-            print(f"   🎮 Juegos encontrados: {h2h.get('games_found', 'N/A')}")
-            print(f"   📊 Promedio H2H: {h2h.get('mean', 'N/A')}")
-            print(f"   📈 Desviación H2H: {h2h.get('std', 'N/A')}")
-            print(f"   📊 Rango H2H: {h2h.get('min', 'N/A')}-{h2h.get('max', 'N/A')}")
-    
-    print("\n✅ Prueba completada")
+    print("\n" + "="*80)
+    print(" PRUEBA COMPLETADA")
+    print("="*80)
     return True
 
 

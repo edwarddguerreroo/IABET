@@ -1050,7 +1050,7 @@ class DoubleDoubleModel:
                     feature_scores[feature] = {}
                 feature_scores[feature]['f_score'] = f_scores[i]
                 
-            self.logger.info("✅ F-score calculado")
+            self.logger.info(" F-score calculado")
         except Exception as e:
             self.logger.warning(f"Error calculando F-score: {e}")
         
@@ -1063,7 +1063,7 @@ class DoubleDoubleModel:
                     feature_scores[feature] = {}
                 feature_scores[feature]['mutual_info'] = mi_scores[i]
                 
-            self.logger.info("✅ Mutual Information calculado")
+            self.logger.info(" Mutual Information calculado")
         except Exception as e:
             self.logger.warning(f"Error calculando Mutual Information: {e}")
         
@@ -1085,7 +1085,7 @@ class DoubleDoubleModel:
                     feature_scores[feature] = {}
                 feature_scores[feature]['xgb_importance'] = xgb_importances[i]
                 
-            self.logger.info("✅ XGBoost importance calculado")
+            self.logger.info(" XGBoost importance calculado")
         except Exception as e:
             self.logger.warning(f"Error calculando XGBoost importance: {e}")
         
@@ -1283,7 +1283,7 @@ class DoubleDoubleModel:
             logger.error(f"ERROR: Solo {specialized_percentage:.1f}% de features son especializadas")
             logger.error("Esto indica un problema en get_feature_columns()")
         else:
-            logger.info("✅ PERFECTO: Modelo usa 100% features especializadas")
+            logger.info(" PERFECTO: Modelo usa 100% features especializadas")
         
         # Preparar datos
         X_train, X_val, y_train, y_val, self.scaler = DataProcessor.prepare_training_data(
@@ -1915,7 +1915,7 @@ class DoubleDoubleModel:
         self.logger.info("=== PREDICCIONES BALANCEADAS PARA APUESTAS (90%+ CONFIANZA) ===")
         self.logger.info(f"Total filtrado por confianza insuficiente: {confidence_filtered}")
         self.logger.info(f"Predicciones sensibles al costo: {cost_aware_predictions}")
-        self.logger.info("🎯 MODO APUESTAS: Predicciones de ALTA CONFIANZA (90%+) con volumen balanceado")
+        self.logger.info(" MODO APUESTAS: Predicciones de ALTA CONFIANZA (90%+) con volumen balanceado")
         
         for position, counts in position_counts.items():
             total = counts['total']
@@ -1929,16 +1929,16 @@ class DoubleDoubleModel:
         
         total_predicted = predictions.sum()
         betting_rate = total_predicted / len(predictions) * 100
-        self.logger.info(f"🎯 APUESTAS: {total_predicted}/{len(predictions)} predicciones de alta confianza ({betting_rate:.1f}%)")
+        self.logger.info(f" APUESTAS: {total_predicted}/{len(predictions)} predicciones de alta confianza ({betting_rate:.1f}%)")
         
         if betting_rate < 3.0:
-            self.logger.info("✅ EXCELENTE: Volumen bajo, alta calidad para apuestas")
+            self.logger.info(" EXCELENTE: Volumen bajo, alta calidad para apuestas")
         elif betting_rate < 8.0:
-            self.logger.info("✅ BUENO: Volumen moderado, buena calidad para apuestas")
+            self.logger.info(" BUENO: Volumen moderado, buena calidad para apuestas")
         elif betting_rate < 15.0:
-            self.logger.info("⚠️  VOLUMEN ALTO: Considerar thresholds más conservadores")
+            self.logger.info("  VOLUMEN ALTO: Considerar thresholds más conservadores")
         else:
-            self.logger.info("❌ VOLUMEN MUY ALTO: Necesita ajustes para apuestas")
+            self.logger.info(" VOLUMEN MUY ALTO: Necesita ajustes para apuestas")
         
         return predictions
     
@@ -2302,7 +2302,7 @@ class DoubleDoubleModel:
                     
                     self.logger.info(f"  {name} - Val F1: {cv_scores.mean():.3f}±{cv_scores.std():.3f}, Overfitting: {overfitting_gap:.3f}")
                     if overfitting_detected:
-                        self.logger.warning(f"  ⚠️  OVERFITTING DETECTADO en {name}")
+                        self.logger.warning(f"    OVERFITTING DETECTADO en {name}")
                     
                 except Exception as e:
                     self.logger.warning(f"Error en CV para {name}: {str(e)}")
@@ -2413,7 +2413,7 @@ class DoubleDoubleModel:
             
             self.logger.info(f"  Stacking - Val F1: {stacking_val_scores.mean():.3f}±{stacking_val_scores.std():.3f}, Overfitting: {stacking_overfitting_gap:.3f}")
             if stacking_overfitting_detected:
-                self.logger.warning(f"  ⚠️  OVERFITTING DETECTADO en stacking model")
+                self.logger.warning(f"    OVERFITTING DETECTADO en stacking model")
             
         except Exception as e:
             self.logger.warning(f"Error en CV para stacking: {str(e)}")
@@ -2425,7 +2425,7 @@ class DoubleDoubleModel:
         self.logger.info(f"Modelos con overfitting detectado: {overfitting_count}/{len(overfitting_metrics)}")
         
         for model_name, metrics in overfitting_metrics.items():
-            status = "⚠️  OVERFITTING" if metrics['detected'] else "✅ OK"
+            status = "  OVERFITTING" if metrics['detected'] else " OK"
             self.logger.info(f"  {model_name}: {status} (Gap: {metrics['gap']:.3f}, Estabilidad: {metrics['stability']:.3f})")
         
         # Guardar métricas de overfitting

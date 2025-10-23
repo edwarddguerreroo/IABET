@@ -62,11 +62,11 @@ class PlayersConfidence:
                     teams_quarters_path="app/architectures/basketball/data/teams_quarters.csv",
                     biometrics_path="app/architectures/basketball/data/biometrics.csv"
                 )
-                self.historical_players, self.historical_teams = data_loader.load_data()
+                self.historical_players, self.historical_teams, self.historical_players_quarters, self.historical_teams_quarters = data_loader.load_data()
                 self.is_loaded = True
-                logger.info("✅ PlayersConfidence: Datos históricos cargados correctamente")
+                logger.info(" PlayersConfidence: Datos históricos cargados correctamente")
             except Exception as e:
-                logger.error(f"❌ Error cargando datos históricos en PlayersConfidence: {e}")
+                logger.error(f" Error cargando datos históricos en PlayersConfidence: {e}")
                 self.is_loaded = False
 
     def calculate_player_confidence(self, raw_prediction: float, stabilized_prediction: float, 
@@ -104,7 +104,7 @@ class PlayersConfidence:
                 player_data['current_status'] = player_status_from_sr
                 player_data['current_team'] = current_team_from_sr
                 
-                logger.debug(f"📊 Info actualizada para {player_name}: "
+                logger.debug(f" Info actualizada para {player_name}: "
                            f"home={is_home_from_sr}, status={player_status_from_sr}, team={current_team_from_sr}")
             
             # ===== SISTEMA SIMPLIFICADO DE CONFIANZA =====
@@ -156,12 +156,12 @@ class PlayersConfidence:
                                 else:
                                     consistency_confidence = 95
                                 
-                                logger.debug(f"📊 Consistencia reciente {player_name} en {target_stat}: "
+                                logger.debug(f" Consistencia reciente {player_name} en {target_stat}: "
                                            f"std={recent_std:.1f}, confianza={consistency_confidence:.1f}")
                             else:
-                                logger.debug(f"⚠️ Columna {stat_column} no encontrada para {target_stat}")
+                                logger.debug(f" Columna {stat_column} no encontrada para {target_stat}")
             except Exception as e:
-                logger.debug(f"⚠️ Error calculando consistencia para {player_name}: {e}")
+                logger.debug(f" Error calculando consistencia para {player_name}: {e}")
                 consistency_confidence = 70
             
             # CALCULAR CONFIANZA SIMPLIFICADA
@@ -175,14 +175,14 @@ class PlayersConfidence:
             # APLICAR LÍMITES REALISTAS (60% - 95%)
             final_confidence = max(60.0, min(95.0, weighted_confidence))
             
-            logger.info(f"🎯 Confianza SIMPLIFICADA {player_name}: {final_confidence:.1f}% "
+            logger.info(f" Confianza SIMPLIFICADA {player_name}: {final_confidence:.1f}% "
                        f"(histórico:{historical_confidence:.0f}, home:{home_confidence:.0f}, "
                        f"estabilidad:{stability_confidence:.0f}, consistencia:{consistency_confidence:.0f})")
             
             return final_confidence
             
         except Exception as e:
-            logger.warning(f"⚠️ Error calculando confianza player: {e}")
+            logger.warning(f" Error calculando confianza player: {e}")
             return 70.0
 
     def _get_stat_column(self, target_stat: str) -> str:
@@ -280,7 +280,7 @@ class PlayersConfidence:
                 # Limitar el factor entre 0.8 y 1.2
                 factor = max(0.8, min(1.2, avg_ratio))
                 
-                logger.info(f"📊 {player_name} vs {opponent_team}: factor {factor:.3f} "
+                logger.info(f" {player_name} vs {opponent_team}: factor {factor:.3f} "
                            f"({vs_opp_stats['games']} juegos H2H)")
                 return factor
             
@@ -584,20 +584,20 @@ class PlayersConfidence:
                                 
                                 if len(player_team_data) >= 5:  # Mínimo 5 juegos para considerarlo
                                     verified_current_players.append(player_name)
-                                    logger.debug(f"✅ {player_name}: Jugador actual de {team_abbrev} "
+                                    logger.debug(f" {player_name}: Jugador actual de {team_abbrev} "
                                                f"(último juego: {days_since_last_game} días atrás)")
                                 else:
-                                    logger.debug(f"⚠️ {player_name}: Pocos datos en {team_abbrev} ({len(player_team_data)} juegos)")
+                                    logger.debug(f" {player_name}: Pocos datos en {team_abbrev} ({len(player_team_data)} juegos)")
                             else:
-                                logger.debug(f"❌ {player_name}: No es jugador actual "
+                                logger.debug(f" {player_name}: No es jugador actual "
                                            f"(equipo: {latest_team}, días: {days_since_last_game})")
                     
                     if verified_current_players:
-                        logger.info(f"🎯 {team_name}: {len(verified_current_players)} jugadores actuales verificados")
+                        logger.info(f" {team_name}: {len(verified_current_players)} jugadores actuales verificados")
                         return verified_current_players
                     else:
                         # Fallback más conservador si no encuentra jugadores actuales
-                        logger.warning(f"⚠️ No se encontraron jugadores actuales para {team_name}, usando fallback")
+                        logger.warning(f" No se encontraron jugadores actuales para {team_name}, usando fallback")
                         return team_players['player'].unique().tolist()[:10]
                 else:
                     return team_players['player'].unique().tolist()[:10]
@@ -701,7 +701,7 @@ class PlayersConfidence:
             # Limitar factor entre 0.9 y 1.1
             factor = max(0.9, min(1.1, factor))
             
-            logger.info(f"🏀 Factor biométrico {player_name} ({player_position}) vs {opponent_team}: {factor:.3f}")
+            logger.info(f" Factor biométrico {player_name} ({player_position}) vs {opponent_team}: {factor:.3f}")
             return factor
             
         except Exception as e:
@@ -758,7 +758,7 @@ class PlayersConfidence:
             # Convertir a score 0-100 (menor CV = mayor score)
             consistency_score = max(0, min(100, 100 - (cv * 50)))
             
-            logger.debug(f"📊 Consistencia {player_name} en {stat_type}: {consistency_score:.1f}")
+            logger.debug(f" Consistencia {player_name} en {stat_type}: {consistency_score:.1f}")
             return consistency_score
             
         except Exception as e:
@@ -827,13 +827,13 @@ class PlayersConfidence:
                 # En temporada regular, criterios más estrictos
                 if days_absent <= 3:
                     injury_factor = 1.0
-                    logger.debug(f"✅ {player_name}: Jugando regularmente ({days_absent} días)")
+                    logger.debug(f" {player_name}: Jugando regularmente ({days_absent} días)")
                 elif 4 <= days_absent <= 7:
                     injury_factor = 0.95
-                    logger.info(f"⚠️ {player_name}: Ausencia corta ({days_absent} días) - Factor: {injury_factor}")
+                    logger.info(f" {player_name}: Ausencia corta ({days_absent} días) - Factor: {injury_factor}")
                 elif 8 <= days_absent <= 20:
                     injury_factor = 0.85
-                    logger.info(f"⚠️ {player_name}: Ausencia media ({days_absent} días) - Factor: {injury_factor}")
+                    logger.info(f" {player_name}: Ausencia media ({days_absent} días) - Factor: {injury_factor}")
                 elif 21 <= days_absent <= 45:
                     injury_factor = 0.75
                     logger.warning(f"🚨 {player_name}: Ausencia larga ({days_absent} días) - Factor: {injury_factor}")
@@ -900,16 +900,16 @@ class PlayersConfidence:
                         # DECISIÓN FINAL
                         if is_active_status and has_no_serious_injuries:
                             available_players.append(player_name)
-                            logger.debug(f"✅ {player_name}: Disponible para predicción")
+                            logger.debug(f" {player_name}: Disponible para predicción")
                         else:
                             reason = []
                             if not is_active_status:
                                 reason.append(f"status: {player_status}")
                             if not has_no_serious_injuries:
                                 reason.append("lesión grave")
-                            logger.debug(f"❌ {player_name}: No disponible ({', '.join(reason)})")
+                            logger.debug(f" {player_name}: No disponible ({', '.join(reason)})")
             
-            logger.info(f"🎯 Jugadores disponibles para predicción: {len(available_players)}")
+            logger.info(f" Jugadores disponibles para predicción: {len(available_players)}")
             return available_players
             
         except Exception as e:
@@ -975,7 +975,7 @@ class PlayersConfidence:
                 # Ultra confianza: usar predicción raw
                 tolerance = 0
                 final_prediction = raw_prediction
-                logger.info(f"🚀 ULTRA CONFIANZA PLAYER ({confidence:.1f}%): Usando predicción RAW")
+                logger.info(f" ULTRA CONFIANZA PLAYER ({confidence:.1f}%): Usando predicción RAW")
                 
             else:
                 # Estrategia fija: 85% modelo + 15% histórico
@@ -983,7 +983,7 @@ class PlayersConfidence:
                 stabilized = (raw_prediction * 0.85) + (actual_stats_mean * 0.15)
                 final_prediction = stabilized + tolerance
                 
-                logger.info(f"🎯 ESTRATEGIA PLAYER ({confidence:.1f}%): 85% modelo + 15% histórico, tolerancia -1")
+                logger.info(f" ESTRATEGIA PLAYER ({confidence:.1f}%): 85% modelo + 15% histórico, tolerancia -1")
             
             # AJUSTE ADICIONAL POR VOLATILIDAD DEL JUGADOR
             if actual_stats_std > 8:  # Jugador muy inconsistente

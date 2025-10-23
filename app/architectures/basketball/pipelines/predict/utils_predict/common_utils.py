@@ -36,7 +36,7 @@ class CommonUtils:
                 teams_quarters_path="app/architectures/basketball/data/teams_quarters.csv",
                 biometrics_path="app/architectures/basketball/data/biometrics.csv"
             )
-        self.historical_players, self.historical_teams = data_loader.load_data()
+        self.historical_players, self.historical_teams, self.historical_players_quarters, self.historical_teams_quarters = data_loader.load_data()
         self.game_adapter = GameDataAdapter()
 
     def _get_team_id(self, team_abbrev: str) -> str:
@@ -50,14 +50,14 @@ class CommonUtils:
             
             if not found_team.empty:
                 team_id = found_team.iloc[0]['team_id']
-                logger.info(f"✅ Team ID encontrado para '{team_abbrev}': {team_id}")
+                logger.info(f" Team ID encontrado para '{team_abbrev}': {team_id}")
                 return team_id
             else:
-                logger.warning(f"❌ No se encontró team_id para '{team_abbrev}'")
+                logger.warning(f" No se encontró team_id para '{team_abbrev}'")
                 return 'unknown'
                 
         except Exception as e:
-            logger.error(f"❌ Error obteniendo team_id para '{team_abbrev}': {e}")
+            logger.error(f" Error obteniendo team_id para '{team_abbrev}': {e}")
             return 'unknown'
     
     def _get_player_id(self, player_name: str, team_abbrev: str = None) -> str:
@@ -83,14 +83,14 @@ class CommonUtils:
             
             if not found_player.empty:
                 player_id = found_player.iloc[0]['player_id']
-                logger.debug(f"✅ Player ID encontrado para '{player_name}': {player_id}")
+                logger.debug(f" Player ID encontrado para '{player_name}': {player_id}")
                 return player_id
             else:
-                logger.debug(f"❌ No se encontró player_id para '{player_name}'")
+                logger.debug(f" No se encontró player_id para '{player_name}'")
                 return 'unknown'
                 
         except Exception as e:
-            logger.error(f"❌ Error obteniendo player_id para '{player_name}': {e}")
+            logger.error(f" Error obteniendo player_id para '{player_name}': {e}")
             return 'unknown'
     
     def _get_team_full_name(self, team_abbr: str) -> str:
@@ -231,13 +231,13 @@ class CommonUtils:
         # Estrategia 1: Búsqueda exacta
         exact_match = players_df[players_df[player_column] == target_player]
         if not exact_match.empty:
-            logger.info(f"✅ Jugador encontrado (exacto): {target_player}")
+            logger.info(f" Jugador encontrado (exacto): {target_player}")
             return exact_match
         
         # Estrategia 2: Búsqueda case-insensitive
         case_match = players_df[players_df[player_column].str.lower() == target_player.lower()]
         if not case_match.empty:
-            logger.info(f"✅ Jugador encontrado (case-insensitive): {target_player}")
+            logger.info(f" Jugador encontrado (case-insensitive): {target_player}")
             return case_match
         
         # Estrategia 3: Búsqueda normalizada (MEJORADA para acentos)
@@ -250,7 +250,7 @@ class CommonUtils:
             
             if not normalized_matches.empty:
                 found_player = normalized_matches.iloc[0][player_column]
-                logger.info(f"✅ Jugador encontrado (normalizado): '{target_player}' -> '{found_player}' ({len(normalized_matches)} registros)")
+                logger.info(f" Jugador encontrado (normalizado): '{target_player}' -> '{found_player}' ({len(normalized_matches)} registros)")
                 return normalized_matches.drop('normalized_name', axis=1)
         
         # Estrategia 4: Búsqueda por contención normalizada (NUEVA)
@@ -268,7 +268,7 @@ class CommonUtils:
             
             if not containment_matches.empty:
                 found_player = containment_matches.iloc[0][player_column]
-                logger.info(f"✅ Jugador encontrado (contención normalizada): '{target_player}' -> '{found_player}' ({len(containment_matches)} registros)")
+                logger.info(f" Jugador encontrado (contención normalizada): '{target_player}' -> '{found_player}' ({len(containment_matches)} registros)")
                 return containment_matches.drop('normalized_name', axis=1)
         
         # Estrategia 5: Búsqueda por contención simple (apellido)
@@ -280,7 +280,7 @@ class CommonUtils:
                 matches = players_df[players_df[player_column].str.contains(last_word, case=False, na=False)]
                 if not matches.empty:
                     found_player = matches.iloc[0][player_column]
-                    logger.info(f"✅ Jugador encontrado (apellido): '{target_player}' -> '{found_player}'")
+                    logger.info(f" Jugador encontrado (apellido): '{target_player}' -> '{found_player}'")
                     return matches.head(1)
         
         # Estrategia 6: Búsqueda por palabras clave múltiples
@@ -301,7 +301,7 @@ class CommonUtils:
             
             if best_match is not None and max_matches >= max(1, len(target_words) - 1):
                 found_player = players_df.loc[best_match, player_column]
-                logger.info(f"✅ Jugador encontrado (palabras múltiples): '{target_player}' -> '{found_player}' ({max_matches}/{len(target_words)} palabras)")
+                logger.info(f" Jugador encontrado (palabras múltiples): '{target_player}' -> '{found_player}' ({max_matches}/{len(target_words)} palabras)")
                 return players_df[players_df.index == best_match]
         
         # Estrategia 7: Búsqueda por similitud usando difflib (NUEVA)
@@ -321,10 +321,10 @@ class CommonUtils:
         
         if best_match_idx is not None:
             found_player = players_df.loc[best_match_idx, player_column]
-            logger.info(f"✅ Jugador encontrado (similitud {best_similarity:.2f}): '{target_player}' -> '{found_player}'")
+            logger.info(f" Jugador encontrado (similitud {best_similarity:.2f}): '{target_player}' -> '{found_player}'")
             return players_df[players_df.index == best_match_idx]
         
-        logger.warning(f"❌ Jugador no encontrado con ninguna estrategia: {target_player}")
+        logger.warning(f" Jugador no encontrado con ninguna estrategia: {target_player}")
         return pd.DataFrame()
     
     def _find_similar_players(self, target_player: str, available_players: List[str]) -> List[str]:
@@ -473,7 +473,7 @@ class CommonUtils:
                     if player.get('fullName', '').strip().lower() == target_player.strip().lower():
                         # Devolver la abreviación del equipo
                         team_alias = team.get('alias', team.get('name', 'Unknown'))
-                        logger.info(f"🏀 Equipo actual de {target_player}: {team_alias}")
+                        logger.info(f" Equipo actual de {target_player}: {team_alias}")
                         return team_alias
             
             logger.warning(f"Jugador {target_player} no encontrado en ningún equipo del juego")
@@ -500,7 +500,7 @@ class CommonUtils:
         # 1. Búsqueda exacta
         exact_match = teams_df[teams_df['Team'] == target_team]
         if not exact_match.empty:
-            logger.debug(f"✅ Equipo encontrado (exacto): '{target_team}'")
+            logger.debug(f" Equipo encontrado (exacto): '{target_team}'")
             return exact_match
         
         # 2. Búsqueda case-insensitive
@@ -508,7 +508,7 @@ class CommonUtils:
         for idx, row in teams_df.iterrows():
             if self._normalize_name(row['Team']) == target_normalized:
                 found_team = teams_df[teams_df.index == idx]
-                logger.debug(f"✅ Equipo encontrado (case-insensitive): '{target_team}' -> '{row['Team']}'")
+                logger.debug(f" Equipo encontrado (case-insensitive): '{target_team}' -> '{row['Team']}'")
                 return found_team
         
         # 3. Búsqueda parcial (contiene)
@@ -516,7 +516,7 @@ class CommonUtils:
             team_normalized = self._normalize_name(row['Team'])
             if target_normalized in team_normalized or team_normalized in target_normalized:
                 found_team = teams_df[teams_df.index == idx]
-                logger.debug(f"✅ Equipo encontrado (parcial): '{target_team}' -> '{row['Team']}'")
+                logger.debug(f" Equipo encontrado (parcial): '{target_team}' -> '{row['Team']}'")
                 return found_team
         
         # 4. Búsqueda usando mapeo de equipos
@@ -525,7 +525,7 @@ class CommonUtils:
         if full_name != target_team:  # Se encontró una conversión
             match = teams_df[teams_df['Team'] == full_name]
             if not match.empty:
-                logger.debug(f"✅ Equipo encontrado (mapeo completo): '{target_team}' -> '{full_name}'")
+                logger.debug(f" Equipo encontrado (mapeo completo): '{target_team}' -> '{full_name}'")
                 return match
         
         # 5. Búsqueda usando abreviación desde nombre completo
@@ -533,7 +533,7 @@ class CommonUtils:
         if abbreviation != target_team.upper()[:3]:  # Se encontró una conversión válida
             match = teams_df[teams_df['Team'] == abbreviation]
             if not match.empty:
-                logger.debug(f"✅ Equipo encontrado (abreviación): '{target_team}' -> '{abbreviation}'")
+                logger.debug(f" Equipo encontrado (abreviación): '{target_team}' -> '{abbreviation}'")
                 return match
         
         # 6. Búsqueda por similitud usando difflib (NUEVA)
@@ -553,10 +553,10 @@ class CommonUtils:
         
         if best_match_idx is not None:
             found_team = teams_df[teams_df.index == best_match_idx]
-            logger.debug(f"✅ Equipo encontrado (similitud {best_similarity:.2f}): '{target_team}' -> '{teams_df.loc[best_match_idx, 'Team']}'")
+            logger.debug(f" Equipo encontrado (similitud {best_similarity:.2f}): '{target_team}' -> '{teams_df.loc[best_match_idx, 'Team']}'")
             return found_team
         
-        logger.warning(f"❌ Equipo no encontrado con ninguna estrategia: {target_team}")
+        logger.warning(f" Equipo no encontrado con ninguna estrategia: {target_team}")
         return pd.DataFrame()
 
     def _get_player_status_in_game(self, players_list: List[Dict], target_name: str) -> str:

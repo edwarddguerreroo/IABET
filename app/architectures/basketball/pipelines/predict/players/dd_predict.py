@@ -512,6 +512,11 @@ class DoubleDoublePredictor:
             
             # Asegurar que la confianza esté en rango válido
             confidence = max(50.0, min(95.0, confidence))
+            
+            # Calcular prediction_std basado en la variabilidad de las probabilidades recientes
+            prediction_std = None
+            if len(recent_probabilities) > 0:
+                prediction_std = round(float(recent_probabilities[:, 1].std()), 3)  # Std de probabilidades "YES"
                 
             return {
                 'dd_prediction': final_prediction,
@@ -527,6 +532,7 @@ class DoubleDoublePredictor:
                     'raw_prediction': final_prediction,
                     'h2h_adjusted_prediction': round(raw_prediction_adjusted, 1) if 'raw_prediction_adjusted' in locals() else final_prediction,
                     'final_prediction': final_prediction,
+                    'prediction_std': prediction_std,
                     'actual_stats_mean': round(recent_data['double_double'].mean(), 1) if 'double_double' in recent_data.columns else 0,
                     'actual_stats_std': round(recent_data['double_double'].std(), 1) if 'double_double' in recent_data.columns else 0,
                     'last_5_games': last_5_stats if 'last_5_stats' in locals() else {'mean': 0, 'std': 0, 'min': 0, 'max': 0, 'count': 0},

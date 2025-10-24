@@ -226,6 +226,24 @@ class TotalPointsPredictor:
                     total_h2h = game_data_h2h['points'].sum()
                     h2h_totals.append(total_h2h)
             
+            # Calcular prediction_std basado en la variabilidad de los totales históricos
+            prediction_std = None
+            if len(home_totals_last_10) > 1 and len(away_totals_last_10) > 1:
+                # Combinar std de ambos equipos usando suma cuadrática
+                home_std = np.std(home_totals_last_10)
+                away_std = np.std(away_totals_last_10)
+                prediction_std = round(np.sqrt(home_std**2 + away_std**2), 1)
+            
+            # Calcular adjustment_factor basado en H2H
+            adjustment_factor = None
+            if len(h2h_totals) > 0:
+                h2h_mean = np.mean(h2h_totals)
+                # Comparar promedio H2H con promedio de ambos equipos
+                if len(home_totals_last_10) > 0 and len(away_totals_last_10) > 0:
+                    avg_team_totals = (np.mean(home_totals_last_10) + np.mean(away_totals_last_10)) / 2
+                    if avg_team_totals > 0:
+                        adjustment_factor = round(h2h_mean / avg_team_totals, 3)
+            
             return {
                 "home_team": home_team_name,
                 "away_team": away_team_name,
@@ -244,6 +262,8 @@ class TotalPointsPredictor:
                     "final_total": final_total,
                     "home_confidence": home_confidence,
                     "away_confidence": away_confidence,
+                    "prediction_std": prediction_std,
+                    "adjustment_factor": adjustment_factor,
                     "home_team_totals": {
                         "last_5_games": {
                             "mean": round(np.mean(home_totals_last_5), 1) if len(home_totals_last_5) > 0 else None,

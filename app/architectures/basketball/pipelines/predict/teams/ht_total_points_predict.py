@@ -258,6 +258,24 @@ class HalfTimeTotalPointsPredictor:
                     if len(ht_values) == 2:  # Ambos tienen datos de HT
                         total_h2h_ht = ht_values.sum()
                         h2h_ht_totals.append(total_h2h_ht)
+            
+            # Calcular prediction_std basado en la variabilidad de los totales HT históricos
+            prediction_std = None
+            if len(home_ht_totals_last_10) > 1 and len(away_ht_totals_last_10) > 1:
+                # Combinar std de ambos equipos usando suma cuadrática
+                home_std = np.std(home_ht_totals_last_10)
+                away_std = np.std(away_ht_totals_last_10)
+                prediction_std = round(np.sqrt(home_std**2 + away_std**2), 1)
+            
+            # Calcular adjustment_factor basado en H2H HT
+            adjustment_factor = None
+            if len(h2h_ht_totals) > 0:
+                h2h_mean = np.mean(h2h_ht_totals)
+                # Comparar promedio H2H con promedio de ambos equipos
+                if len(home_ht_totals_last_10) > 0 and len(away_ht_totals_last_10) > 0:
+                    avg_team_ht_totals = (np.mean(home_ht_totals_last_10) + np.mean(away_ht_totals_last_10)) / 2
+                    if avg_team_ht_totals > 0:
+                        adjustment_factor = round(h2h_mean / avg_team_ht_totals, 3)
                 
             return {
                 "home_team": home_team_name,
@@ -278,6 +296,8 @@ class HalfTimeTotalPointsPredictor:
                     "method": "halftime_teams_sum_with_tolerance",
                     "home_confidence": home_confidence,
                     "away_confidence": away_confidence,
+                    "prediction_std": prediction_std,
+                    "adjustment_factor": adjustment_factor,
                     "home_team_ht_totals": {
                         "last_5_games": {
                             "mean": round(np.mean(home_ht_totals_last_5), 1) if home_ht_totals_last_5 else 0,

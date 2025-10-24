@@ -1072,7 +1072,7 @@ class UnifiedPredictor:
                 'min': h2h_totals.get('min', None),
                 'max': h2h_totals.get('max', None),
                 'count': h2h_totals.get('games_found', 0),  # h2h_totals usa 'games_found', no 'count'
-                'adjustment_factor': None,  # No disponible para Total Points
+                'adjustment_factor': details_data.get('adjustment_factor', None),  # Ahora viene del predictor
                 'consistency_score': self._calculate_h2h_consistency(h2h_totals.get('std'), h2h_totals.get('mean')) if h2h_totals.get('std') and h2h_totals.get('mean') else None
             },
             'trend_analysis': {
@@ -1093,75 +1093,16 @@ class UnifiedPredictor:
         Returns:
             historical_context formateado con win rates
         """
-        home_stats = details_data.get('home_team_stats', {})
-        away_stats = details_data.get('away_team_stats', {})
-        h2h_stats = details_data.get('h2h_stats', {})
-        
-        # Calcular promedios de win rate combinados
-        home_last_5 = home_stats.get('last_5_games', {})
-        away_last_5 = away_stats.get('last_5_games', {})
-        home_last_10 = home_stats.get('last_10_games', {})
-        away_last_10 = away_stats.get('last_10_games', {})
-        
-        # Season avg y std basado en win rate (no en puntos)
-        home_win_rate = home_stats.get('win_rate', 0.0)
-        away_win_rate = away_stats.get('win_rate', 0.0)
-        season_avg_win_rate = (home_win_rate + away_win_rate) / 2
-        
-        # Calcular std de win rate
-        # Si ambos equipos tienen datos
-        home_count_10 = home_last_10.get('count', 0)
-        away_count_10 = away_last_10.get('count', 0)
-        
-        # Para win rate, no hay std directo, calcularlo basado en variabilidad
-        # Simplificación: usar diferencia entre home y away como proxy de variabilidad
-        season_std_win_rate = abs(home_win_rate - away_win_rate) / 2
-        
-        # Last 5 y Last 10 promedios
-        last_5_win_rate = None
-        if home_last_5.get('count', 0) > 0 and away_last_5.get('count', 0) > 0:
-            last_5_win_rate = (home_last_5.get('win_rate', 0) + away_last_5.get('win_rate', 0)) / 2
-        
-        last_10_win_rate = None
-        if home_count_10 > 0 and away_count_10 > 0:
-            last_10_win_rate = (home_last_10.get('win_rate', 0) + away_last_10.get('win_rate', 0)) / 2
-        
+        # DEVOLVER LA ESTRUCTURA COMPLETA DEL PREDICTOR (NO RESUMIR)
+        # El usuario quiere ver home_team_stats, away_team_stats y h2h_stats tal cual
         return {
-            'games_analyzed': max(home_stats.get('total_games', 0), away_stats.get('total_games', 0)),
-            'season_avg': season_avg_win_rate,
-            'season_std': season_std_win_rate,
-            'recent_form': {
-                'last_5': {
-                    'mean': last_5_win_rate or 0.0,
-                    'std': 0.0,  # No aplica para win rate
-                    'min': min(home_last_5.get('win_rate', 0), away_last_5.get('win_rate', 0)),
-                    'max': max(home_last_5.get('win_rate', 0), away_last_5.get('win_rate', 0)),
-                    'count': max(home_last_5.get('count', 0), away_last_5.get('count', 0))
-                },
-                'last_10': {
-                    'mean': last_10_win_rate or 0.0,
-                    'std': 0.0,  # No aplica para win rate
-                    'min': min(home_last_10.get('win_rate', 0), away_last_10.get('win_rate', 0)),
-                    'max': max(home_last_10.get('win_rate', 0), away_last_10.get('win_rate', 0)),
-                    'count': max(home_count_10, away_count_10)
-                }
-            },
-            'h2h_matchup': {
-                'games': h2h_stats.get('games_found', 0),
-                'mean': (h2h_stats.get('home_h2h_win_rate', 0) + h2h_stats.get('away_h2h_win_rate', 0)) / 2 if h2h_stats.get('games_found', 0) > 0 else None,
-                'std': self._calculate_win_rate_std(h2h_stats) if h2h_stats.get('games_found', 0) > 0 else None,
-                'min': min(h2h_stats.get('home_h2h_win_rate', 0), h2h_stats.get('away_h2h_win_rate', 0)) if h2h_stats.get('games_found', 0) > 0 else None,
-                'max': max(h2h_stats.get('home_h2h_win_rate', 0), h2h_stats.get('away_h2h_win_rate', 0)) if h2h_stats.get('games_found', 0) > 0 else None,
-                'count': h2h_stats.get('games_found', 0),
-                'adjustment_factor': None,  # No aplicable para Is Win
-                'consistency_score': self._calculate_h2h_consistency_win_rate(h2h_stats) if h2h_stats.get('games_found', 0) > 0 else None
-            },
-            'trend_analysis': {
-                'direction': self._determine_trend_direction_from_means(last_5_win_rate, last_10_win_rate) if last_5_win_rate and last_10_win_rate else 'flat',
-                'slope_5_games': self._calculate_slope(last_5_win_rate, last_10_win_rate) if last_5_win_rate and last_10_win_rate else 0.0,
-                'consistency_score': self._calculate_consistency_from_std(season_std_win_rate, season_avg_win_rate),
-                'form_rating': last_5_win_rate or 0.0
-            }
+            'point_difference': details_data.get('point_difference', 0),
+            'win_probability': details_data.get('win_probability', 0),
+            'home_points_predicted': details_data.get('home_points_predicted', 0),
+            'away_points_predicted': details_data.get('away_points_predicted', 0),
+            'home_team_stats': details_data.get('home_team_stats', {}),
+            'away_team_stats': details_data.get('away_team_stats', {}),
+            'h2h_stats': details_data.get('h2h_stats', {})
         }
     
     def _build_team_points_historical_context(self, details_data: Dict[str, Any]) -> Dict[str, Any]:

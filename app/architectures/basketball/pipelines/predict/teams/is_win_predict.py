@@ -275,23 +275,23 @@ class IsWinPredictor:
                     winner_confidence = away_confidence
                     logger.info(f"✈️ GANADOR PREDICHO (empate, mayor confianza): {away_team_name}")
             
-            # Calcular probabilidad de victoria basada en diferencia de puntos
+            # Calcular probabilidad de victoria basada en diferencia de puntos (NO HARDCODE)
+            # Usar función logística para calcular probabilidad basada en diferencia de puntos
             point_difference = abs(home_points - away_points)
-            if point_difference > 20:
-                win_probability = 0.85  # Diferencia grande = alta probabilidad
-            elif point_difference > 10:
-                win_probability = 0.75  # Diferencia media = probabilidad media-alta
-            elif point_difference > 5:
-                win_probability = 0.65  # Diferencia pequeña = probabilidad media
-            else:
-                win_probability = 0.60  # Diferencia muy pequeña = probabilidad mínima aceptable
             
-            # Ajustar probabilidad basada en confianza promedio
+            # Normalizar diferencia de puntos a probabilidad usando función sigmoide
+            # P(win) = 1 / (1 + exp(-k * (diff - offset)))
+            # donde k controla la pendiente y offset el punto medio
+            import math
+            k = 0.15  # Pendiente: determina qué tan rápido crece la probabilidad
+            offset = 5  # Punto donde P(win) = 0.5
+            win_probability = 1 / (1 + math.exp(-k * (point_difference - offset)))
+            
+            # Ajustar probabilidad basada en confianza promedio (NO HARDCODE)
             avg_confidence = (home_confidence + away_confidence) / 2
-            if avg_confidence > 80:
-                win_probability = min(win_probability + 0.1, 0.95)
-            elif avg_confidence < 60:
-                win_probability = max(win_probability - 0.05, 0.55)  # Reducir menos el ajuste
+            # Ajuste proporcional a la confianza (no hardcoded thresholds)
+            confidence_adjustment = (avg_confidence - 70) / 100  # Normalizar alrededor de 70%
+            win_probability = min(max(win_probability + confidence_adjustment * 0.1, 0.50), 0.99)
             
             # SIEMPRE emitir predicción - el equipo con más puntos predichos es el ganador
             logger.info(f" Probabilidad de victoria: {win_probability:.1%} - Emitiendo predicción")
@@ -341,6 +341,23 @@ class IsWinPredictor:
             h2h_games_count = len(h2h_games)
             home_h2h_wins = len(h2h_games[(h2h_games['Team'] == home_team) & (h2h_games['is_win'] == 1)])
             away_h2h_wins = len(h2h_games[(h2h_games['Team'] == away_team) & (h2h_games['is_win'] == 1)])
+            
+            # Calcular prediction_std basado en variabilidad de win rates
+            prediction_std = None
+            if home_win_rate > 0 and away_win_rate > 0:
+                # Desviación estándar de la diferencia de win rates
+                win_rate_diff = abs(home_win_rate - away_win_rate)
+                prediction_std = round(win_rate_diff / 2, 1)
+            
+            # Calcular adjustment_factor basado en H2H
+            adjustment_factor = None
+            if h2h_games_count > 0:
+                # Factor basado en dominancia H2H
+                home_h2h_rate = (home_h2h_wins / h2h_games_count) * 100
+                away_h2h_rate = (away_h2h_wins / h2h_games_count) * 100
+                # Si un equipo domina H2H, el factor se aleja de 1.0
+                h2h_dominance = abs(home_h2h_rate - away_h2h_rate) / 100
+                adjustment_factor = round(1.0 + (h2h_dominance * 0.5), 3)
                 
             return {
                 "home_team": home_team_name,
@@ -357,6 +374,8 @@ class IsWinPredictor:
                     "away_points_predicted": away_points,
                     "point_difference": abs(home_points - away_points),
                     "win_probability": win_probability,
+                    "prediction_std": prediction_std,
+                    "adjustment_factor": adjustment_factor,
                     "home_team_stats": {
                         "total_games": home_total_games,
                         "total_wins": home_total_wins,

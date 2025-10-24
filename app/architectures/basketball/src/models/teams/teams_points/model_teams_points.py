@@ -556,57 +556,9 @@ class TeamPointsModel:
         self.is_trained = False
         self.best_model_name = None
         
-        # Configurar modelos base
-        self._setup_base_models()
-        
         logger.info("TeamPointsAdvancedModel inicializado")
         logger.info(f"Optimización bayesiana: {'Habilitada' if self.bayesian_optimizer else 'Deshabilitada'}")
         logger.info(f"Dispositivo preferido: {device or 'auto'}")
-    
-    def _setup_base_models(self):
-        """ANTI-OVERFITTING: Modelos base con regularización AGRESIVA"""
-        self.models = {
-            'xgboost': xgb.XGBRegressor(
-                n_estimators=150,        # REDUCIR estimadores
-                max_depth=4,             # REDUCIR profundidad
-                learning_rate=0.05,      # REDUCIR learning rate
-                subsample=0.7,           # MÁS subsample
-                colsample_bytree=0.7,    # MÁS colsample
-                reg_alpha=2.0,           # AUMENTAR regularización L1
-                reg_lambda=2.0,          # AUMENTAR regularización L2
-                min_child_weight=5,      # AUMENTAR min child weight
-                gamma=1.0,               # AGREGAR gamma para pruning
-                random_state=42,
-                n_jobs=-1
-            ),
-            'lightgbm': lgb.LGBMRegressor(
-                n_estimators=150,        # REDUCIR estimadores
-                max_depth=4,             # REDUCIR profundidad
-                learning_rate=0.05,      # REDUCIR learning rate
-                subsample=0.7,           # MÁS subsample
-                colsample_bytree=0.7,    # MÁS colsample
-                reg_alpha=2.0,           # AUMENTAR regularización L1
-                reg_lambda=2.0,          # AUMENTAR regularización L2
-                min_child_samples=30,    # AUMENTAR min child samples
-                min_split_gain=0.1,      # AGREGAR min split gain
-                random_state=42,
-                verbosity=-1,
-                n_jobs=-1
-            ),
-            'catboost': cb.CatBoostRegressor(
-                iterations=150,          # REDUCIR iteraciones
-                depth=4,                 # REDUCIR profundidad
-                learning_rate=0.05,      # REDUCIR learning rate
-                subsample=0.7,           # MÁS subsample
-                colsample_bylevel=0.7,   # MÁS colsample
-                l2_leaf_reg=3.0,         # AUMENTAR regularización L2
-                min_data_in_leaf=15,     # AUMENTAR min data in leaf
-                random_state=42,
-                verbose=False,
-                thread_count=-1
-            )
-            # SIMPLICIDAD: Solo 3 modelos base, NO neural networks
-        }
     
     def _setup_stacking_model(self, base_models):
         """
@@ -737,7 +689,10 @@ class TeamPointsModel:
         
         # Generar características
         logger.info("Generando características avanzadas")
-        self.feature_columns = self.feature_engineer.generate_all_features(df_clean)
+        df_clean = self.feature_engineer.generate_all_features(df_clean)  # Retorna DataFrame transformado
+        
+        # Obtener lista de features generadas
+        self.feature_columns = [col for col in df_clean.columns if col not in ['Team', 'Date', 'Opp', 'points']]
         
         # Verificar columnas disponibles
         available_features = [f for f in self.feature_columns if f in df_clean.columns]
@@ -1057,6 +1012,12 @@ class TeamPointsModel:
         if not self.is_trained:
             raise ValueError("El modelo debe ser entrenado primero")
         
+        # Verificar orden cronológico antes de aplicar filtros
+        if 'Date' in df.columns and 'Team' in df.columns:
+            if not df['Date'].is_monotonic_increasing:
+                logger.info("Reordenando datos cronológicamente para predicción...")
+                df = df.sort_values(['Team', 'Date']).reset_index(drop=True)
+        
         # APLICAR LOS MISMOS FILTROS DE CALIDAD QUE EN ENTRENAMIENTO
         logger.info("Aplicando filtros de calidad de datos para predicción...")
         df_clean = self._apply_data_quality_filters(df)
@@ -1064,14 +1025,34 @@ class TeamPointsModel:
         # Limpiar cache para nueva predicción
         self.feature_engineer.clear_cache()
         
-        # Generar características
-        _ = self.feature_engineer.generate_all_features(df_clean)
+        # Generar características (modifica df_clean in-place, retorna List[str])
+        features = self.feature_engineer.generate_all_features(df_clean)
         
-        # Usar características seleccionadas
-        available_features = [f for f in self.selected_features if f in df_clean.columns]
-        if len(available_features) != len(self.selected_features):
-            missing = set(self.selected_features) - set(available_features)
-            logger.warning(f"Características faltantes: {list(missing)[:5]}")
+        # Determinar expected_features dinámicamente
+        try:
+            if hasattr(self, 'selected_features') and self.selected_features:
+                expected_features = self.selected_features
+                logger.info(f"Usando selected_features del entrenamiento: {len(expected_features)} features")
+            elif hasattr(self, 'expected_features'):
+                expected_features = self.expected_features
+                logger.info(f"Usando expected_features: {len(expected_features)} features")
+            else:
+                # Fallback: usar todas las features generadas
+                expected_features = features
+                logger.warning("No se encontraron selected_features, usando todas las features generadas")
+        except Exception as e:
+            logger.warning(f"Error obteniendo expected_features: {e}")
+            expected_features = features if features else []
+        
+        # Reordenar DataFrame según expected_features (df_clean ya tiene las features)
+        available_features = [f for f in expected_features if f in df_clean.columns]
+        if len(available_features) != len(expected_features):
+            missing = set(expected_features) - set(available_features)
+            logger.warning(f"Features faltantes ({len(missing)}): {list(missing)[:5]}...")
+            # Agregar features faltantes con valor 0
+            for feature in missing:
+                df_clean[feature] = 0
+                available_features.append(feature)
         
         # Preparar datos
         X = df_clean[available_features].fillna(0)

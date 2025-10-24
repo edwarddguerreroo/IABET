@@ -101,15 +101,11 @@ class DoubleDoubleFeatureEngineer:
         return result
 
     def _convert_mp_to_numeric(self, df: pd.DataFrame) -> None:
-        """Convierte columna MP (minutos jugados) de formato MM:SS a decimal o usa 'minutes' si existe"""
-        # Priorizar 'minutes' del nuevo dataset si existe
-        if 'minutes' in df.columns:
-            if 'MP' not in df.columns:
-                df['MP'] = df['minutes']
-            else:
-                # Si ambos existen, usar 'minutes' que es más confiable
-                df['MP'] = df['minutes']
-        elif 'MP' in df.columns and df['MP'].dtype == 'object':
+        """Asegura que la columna 'minutes' esté disponible y en formato decimal"""
+        if 'minutes' not in df.columns:
+            logger.warning("No se encontró columna 'minutes'")
+            df['minutes'] = 0
+        elif df['minutes'].dtype == 'object':
             def parse_time(time_str):
                 try:
                     if pd.isna(time_str) or time_str == '':
@@ -121,7 +117,7 @@ class DoubleDoubleFeatureEngineer:
                 except:
                     return 0.0
             
-            df['MP'] = df['MP'].apply(parse_time)
+            df['minutes'] = df['minutes'].apply(parse_time)
     
     def generate_all_features(self, df: pd.DataFrame) -> List[str]:
         """
@@ -205,15 +201,8 @@ class DoubleDoubleFeatureEngineer:
         final_features = numerical_features
         self.feature_columns = final_features
         
-        logger.debug(f"Features especializadas creadas: {len(final_features)}")
-        logger.debug(f"Features especializadas: {final_features[:10]}...")  # Mostrar primeras 10
-        
-        if len(final_features) == 0:
-            logger.error(" NO se generaron features especializadas!")
-            return []
-        
         return final_features
-    
+
     def _create_dd_specialized_features(self, df: pd.DataFrame) -> None:
         """Crear features especializadas para predicción de double double"""
         logger.debug("Generando features especializadas DD...")

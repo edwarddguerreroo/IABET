@@ -348,16 +348,16 @@ class StackingTRBModel:
                 logger.info("Ordenando datos cronológicamente...")
                 df = df.sort_values(['player', 'Date']).reset_index(drop=True)
 
-        # Generar features especializadas para rebotes
+        # Generar features especializadas para rebotes (modifica df in-place)
         logger.info("Generando características especializadas...")
-        features = self.feature_engineer.generate_all_features(df)  # Usar datos filtrados
+        features = self.feature_engineer.generate_all_features(df)  # Retorna List[str]
         
         if not features:
             raise ValueError("No se pudieron generar features para TRB")
         
         logger.info(f"Features seleccionadas: {len(features)}")
 
-        # Preparar datos (ahora df_clean tiene las features)
+        # Preparar datos (df ya tiene las features generadas)
         X = df[features].fillna(0)
         y = df['rebounds']
         
@@ -703,27 +703,36 @@ class StackingTRBModel:
         if not hasattr(self, 'trained_base_models') or not hasattr(self, 'meta_learner'):
             raise ValueError("Modelo no entrenado. Ejecutar train() primero.")
 
-        # Generar features (modificar DataFrame directamente)
+       # Verificar orden cronológico antes de generar features
+        if 'Date' in df.columns and 'player' in df.columns:
+            if not df['Date'].is_monotonic_increasing:
+                logger.info("Reordenando datos cronológicamente para predicción...")
+                df = df.sort_values(['player', 'Date']).reset_index(drop=True)
+
+        # Generar features (modifica df in-place, retorna List[str])
         features = self.feature_engineer.generate_all_features(df)
         
         # Determinar expected_features dinámicamente del modelo entrenado
         try:
             if hasattr(self, 'expected_features'):
                 expected_features = self.expected_features
+                logger.info(f"Usando expected_features del modelo: {len(expected_features)} features")
             elif hasattr(self, 'selected_features') and self.selected_features:
                 expected_features = self.selected_features
+                logger.info(f"Usando selected_features del entrenamiento: {len(expected_features)} features")
             else:
-                # Fallback: usar todas las features numéricas disponibles
-                expected_features = [col for col in df.columns if df[col].dtype in ['int64', 'float64']]
+                # Fallback: usar todas las features generadas
+                expected_features = features
+                logger.warning("No se encontraron expected_features, usando todas las features generadas")
         except Exception as e:
-            logger.warning(f"No se pudieron obtener expected_features: {e}")
+            logger.warning(f"Error obteniendo expected_features: {e}")
             expected_features = features if features else []
         
-        # Reordenar DataFrame según expected_features
+        # Reordenar DataFrame según expected_features (df ya tiene las features)
         available_features = [f for f in expected_features if f in df.columns]
         if len(available_features) != len(expected_features):
             missing_features = set(expected_features) - set(available_features)
-            logger.warning(f"Features faltantes: {missing_features}")
+            logger.warning(f"Features faltantes ({len(missing_features)}): {list(missing_features)[:5]}...")
             # Agregar features faltantes con valor 0
             for feature in missing_features:
                 df[feature] = 0
@@ -732,7 +741,7 @@ class StackingTRBModel:
         # Usar expected_features en el orden correcto
         X = df[expected_features].fillna(0)
         
-        # 🔧 CRÍTICO: Aplicar el scaler antes de predecir (igual que en entrenamiento)
+        # Aplicar el scaler antes de predecir (igual que en entrenamiento)
         X_scaled = self.scaler.transform(X)
         X = pd.DataFrame(X_scaled, columns=expected_features, index=X.index)
         

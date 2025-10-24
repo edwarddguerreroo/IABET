@@ -243,11 +243,11 @@ class XGBoostPTSTrainer:
         os.makedirs(self.output_dir, exist_ok=True)
         
         # Crear figura principal con subplots organizados
-        fig = plt.figure(figsize=(24, 16))
+        fig = plt.figure(figsize=(28, 20))
         fig.suptitle('Dashboard Completo - Modelo NBA Points Prediction', fontsize=20, fontweight='bold', y=0.98)
         
-        # Crear grid de subplots (4 filas x 4 columnas)
-        gs = fig.add_gridspec(4, 4, hspace=0.3, wspace=0.3)
+        # Crear grid de subplots (5 filas x 4 columnas para incluir correlación)
+        gs = fig.add_gridspec(5, 4, hspace=0.3, wspace=0.3)
         
         # 1. Métricas principales del modelo (esquina superior izquierda)
         ax1 = fig.add_subplot(gs[0, 0])
@@ -277,13 +277,17 @@ class XGBoostPTSTrainer:
         ax7 = fig.add_subplot(gs[2, 2:4])
         self._plot_points_range_analysis_compact(ax7)
         
-        # 8. Análisis temporal (cuarta fila, izquierda)
-        ax8 = fig.add_subplot(gs[3, 0:2])
-        self._plot_temporal_analysis_compact(ax8)
+        # 8. NUEVO: Correlación Features-Target (cuarta fila, completa)
+        ax8 = fig.add_subplot(gs[3, :])
+        self._plot_correlation_analysis_compact(ax8)
         
-        # 9. Top jugadores predicciones (cuarta fila, derecha)
-        ax9 = fig.add_subplot(gs[3, 2:4])
-        self._plot_top_players_analysis_compact(ax9)
+        # 9. Análisis temporal (quinta fila, izquierda)
+        ax9 = fig.add_subplot(gs[4, 0:2])
+        self._plot_temporal_analysis_compact(ax9)
+        
+        # 10. Top jugadores predicciones (quinta fila, derecha)
+        ax10 = fig.add_subplot(gs[4, 2:4])
+        self._plot_top_players_analysis_compact(ax10)
         
         # Guardar como PNG con ruta normalizada
         png_path = os.path.normpath(os.path.join(self.output_dir, 'model_dashboard_complete.png'))
@@ -558,6 +562,77 @@ Estado: PRODUCCIÓN
         
         ax.grid(axis='y', alpha=0.3)
     
+    def _plot_correlation_analysis_compact(self, ax):
+        """
+        Análisis de correlación entre features y target.
+        Muestra las top 20 features por importancia con su correlación.
+        """
+        if not hasattr(self.model, 'get_feature_importance'):
+            ax.text(0.5, 0.5, 'Feature importance no disponible', 
+                   ha='center', va='center', transform=ax.transAxes)
+            return
+        
+        # Obtener top 20 features por importancia
+        top_features = dict(list(self.model.get_feature_importance(None).items())[:20])
+        features = list(top_features.keys())
+        importance = list(top_features.values())
+        
+        # Calcular correlaciones para estas features
+        correlations = []
+        for feature in features:
+            if feature in self.df.columns:
+                try:
+                    corr = self.df[feature].corr(self.df['points'])
+                    correlations.append(corr)
+                except:
+                    correlations.append(0)
+            else:
+                correlations.append(0)
+        
+        # Crear gráfico de barras doble (importancia y correlación)
+        x_pos = np.arange(len(features))
+        width = 0.35
+        
+        # Normalizar importancia para que esté en escala similar a correlación (-1 a 1)
+        importance_normalized = np.array(importance) / max(importance) if max(importance) > 0 else np.array(importance)
+        
+        # Gráfico de barras
+        bars1 = ax.bar(x_pos - width/2, importance_normalized, width, 
+                       label='Importancia (norm)', color='steelblue', alpha=0.7)
+        bars2 = ax.bar(x_pos + width/2, correlations, width, 
+                       label='Correlación', color='coral', alpha=0.7)
+        
+        # Configurar ejes
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(features, rotation=45, ha='right', fontsize=8)
+        ax.set_ylabel('Valor', fontsize=10)
+        ax.set_title('Top 20 Features: Importancia vs Correlación con Target', 
+                    fontsize=14, fontweight='bold')
+        ax.legend(fontsize=10, loc='upper right')
+        
+        # Línea horizontal en 0 para referencia
+        ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5, alpha=0.3)
+        
+        # Agregar grid
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Agregar anotaciones para correlaciones más fuertes
+        for i, (bar, corr, imp_norm) in enumerate(zip(bars2, correlations, importance_normalized)):
+            if abs(corr) > 0.3:  # Solo anotar correlaciones fuertes
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02, 
+                       f'{corr:.2f}', ha='center', va='bottom', fontsize=7, 
+                       fontweight='bold', color='darkred')
+        
+        # Información adicional
+        avg_corr = np.mean(np.abs(correlations))
+        max_corr = max(correlations, key=abs)
+        max_corr_feature = features[correlations.index(max_corr)]
+        
+        info_text = f'Avg |Corr|: {avg_corr:.3f} | Max Corr: {max_corr:.3f} ({max_corr_feature})'
+        ax.text(0.02, 0.98, info_text, transform=ax.transAxes, 
+               fontsize=9, verticalalignment='top',
+               bbox=dict(boxstyle="round,pad=0.4", facecolor="lightyellow", alpha=0.8))
+    
     def _plot_temporal_analysis_compact(self, ax):
         """Análisis temporal compacto."""
         if self.df is None:
@@ -656,7 +731,7 @@ Estado: PRODUCCIÓN
             predictions_path = os.path.normpath(os.path.join(self.output_dir, 'predictions.csv'))
             predictions_df.to_csv(predictions_path, index=False)
         
-        # Guardar feature importance COMPLETA (todas las features utilizadas)
+        # Guardar feature importance COMPLETA (todas las features utilizadas) + CORRELACIÓN
         if hasattr(self.model, 'get_feature_importance'):
             try:
                 # Obtener TODAS las features sin límite
@@ -672,10 +747,33 @@ Estado: PRODUCCIÓN
                 importance_df['importance_pct'] = (importance_df['importance'] / importance_df['importance'].sum() * 100).round(4)
                 importance_df['cumulative_pct'] = importance_df['importance_pct'].cumsum().round(4)
                 
+                # NUEVO: Calcular correlación de cada feature con el target
+                logger.info("Calculando correlaciones feature-target...")
+                correlations = []
+                for feature in importance_df['feature']:
+                    if feature in self.df.columns:
+                        try:
+                            # Calcular correlación de Pearson
+                            corr = self.df[feature].corr(self.df['points'])
+                            correlations.append(corr)
+                        except:
+                            correlations.append(np.nan)
+                    else:
+                        correlations.append(np.nan)
+                
+                importance_df['correlation'] = correlations
+                importance_df['abs_correlation'] = importance_df['correlation'].abs()
+                
+                # Reordenar columnas para mejor lectura
+                importance_df = importance_df[[
+                    'rank', 'feature', 'importance', 'importance_pct', 
+                    'cumulative_pct', 'correlation', 'abs_correlation'
+                ]]
+                
                 importance_path = os.path.normpath(os.path.join(self.output_dir, 'feature_importance.csv'))
                 importance_df.to_csv(importance_path, index=False)
                 
-                logger.info(f"Feature importance exportada: {total_features} features completas en {importance_path}")
+                logger.info(f"Feature importance + correlación exportada: {total_features} features completas en {importance_path}")
             except Exception as e:
                 logger.warning(f"No se pudo guardar feature importance: {e}")
         

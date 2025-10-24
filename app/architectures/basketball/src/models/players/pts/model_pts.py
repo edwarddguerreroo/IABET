@@ -787,7 +787,10 @@ class StackingPTSModel:
 
         # Generar características en datos filtrados
         logger.info("Generando características especializadas...")
-        feature_names = self.feature_engineer.generate_all_features(df)
+        df = self.feature_engineer.generate_all_features(df)  # Retorna DataFrame transformado
+        
+        # Obtener lista de features generadas
+        feature_names = [col for col in df.columns if col not in ['player', 'Date', 'Team', 'Opp', 'points']]
         self.selected_features = feature_names
         self.feature_names = feature_names
         
@@ -889,7 +892,7 @@ class StackingPTSModel:
         if not hasattr(self, 'trained_base_models') or not hasattr(self, 'meta_learner'):
             raise ValueError("Modelo no entrenado. Ejecutar train() primero.")
         
-        # Generar features en datos filtrados
+        # Generar features (modifica df in-place, retorna List[str])
         features = self.feature_engineer.generate_all_features(df)
         
         # Determinar expected_features dinámicamente del modelo entrenado
@@ -899,13 +902,13 @@ class StackingPTSModel:
             elif hasattr(self, 'selected_features') and self.selected_features:
                 expected_features = self.selected_features
             else:
-                # Fallback: usar todas las features numéricas disponibles
-                expected_features = [col for col in df.columns if df[col].dtype in ['int64', 'float64']]
+                # Fallback: usar todas las features generadas
+                expected_features = features
         except Exception as e:
             logger.warning(f"No se pudieron obtener expected_features: {e}")
             expected_features = features if features else []
         
-        # Reordenar DataFrame según expected_features
+        # Reordenar DataFrame según expected_features (df ya tiene las features)
         available_features = [f for f in expected_features if f in df.columns]
         if len(available_features) != len(expected_features):
             missing_features = set(expected_features) - set(available_features)

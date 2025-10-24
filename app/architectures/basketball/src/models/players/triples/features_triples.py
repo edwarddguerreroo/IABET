@@ -219,14 +219,9 @@ class ThreePointsFeatureEngineer:
         missing_from_df = [f for f in created_features if f not in df.columns]
         if missing_from_df:
             logger.warning(f" Features registradas pero no en DataFrame: {missing_from_df}")
-        
-        # USAR SOLO LAS FEATURES REGISTRADAS Y DISPONIBLES
-        
+                
         # El ordenamiento de features se maneja en el modelo
         final_features = available_features
-        
-        logger.info(f"Features disponibles para predicción: {len(final_features)}")
-
                 
         return final_features
     

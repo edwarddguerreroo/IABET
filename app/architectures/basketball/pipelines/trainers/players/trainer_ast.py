@@ -269,11 +269,11 @@ class XGBoostASTTrainer:
         os.makedirs(self.output_dir, exist_ok=True)
         
         # Crear figura principal con subplots organizados
-        fig = plt.figure(figsize=(24, 16))
-        fig.suptitle('Dashboard Completo - Modelo NBA AST Prediction', fontsize=20, fontweight='bold', y=0.98)
+        fig = plt.figure(figsize=(28, 20))
+        fig.suptitle('Dashboard Completo - Modelo NBA AST Prediction', fontsize=22, fontweight='bold', y=0.98)
         
-        # Crear grid de subplots (4 filas x 4 columnas)
-        gs = fig.add_gridspec(4, 4, hspace=0.3, wspace=0.3)
+        # Crear grid de subplots (5 filas x 4 columnas)
+        gs = fig.add_gridspec(5, 4, hspace=0.35, wspace=0.3)
         
         # 1. Métricas principales del modelo (esquina superior izquierda)
         ax1 = fig.add_subplot(gs[0, 0])
@@ -311,6 +311,10 @@ class XGBoostASTTrainer:
         ax9 = fig.add_subplot(gs[3, 2:4])
         self._plot_top_passers_analysis_compact(ax9)
         
+        # 10. Correlation plot (quinta fila, completa)
+        ax10 = fig.add_subplot(gs[4, :])
+        self._plot_correlation_analysis(ax10)
+        
         # Guardar como PNG con ruta normalizada
         png_path = os.path.normpath(os.path.join(self.output_dir, 'model_dashboard_complete.png'))
         
@@ -326,6 +330,111 @@ class XGBoostASTTrainer:
             logger.info(f"Dashboard guardado exitosamente en: {abs_png_path}")
         finally:
             plt.close()
+    
+    def _plot_correlation_analysis(self, ax):
+        """
+        Gráfico de análisis de correlación entre feature importance y correlación con el target.
+        Similar al plot de PTS.
+        """
+        if not hasattr(self.model.stacking_model, 'feature_importance') or not self.model.stacking_model.feature_importance:
+            ax.text(0.5, 0.5, 'Feature importance\nno disponible', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Análisis de Correlación', fontweight='bold')
+            return
+        
+        # Obtener feature importance
+        importance_dict = self.model.stacking_model.feature_importance
+        
+        # Calcular correlaciones
+        logger.info("Calculando correlaciones para el plot...")
+        correlations = {}
+        train_data = self.df[self.df['Date'] < self.model.cutoff_date].copy()
+        y_train = train_data['assists']
+        
+        for feature in importance_dict.keys():
+            if feature in train_data.columns:
+                try:
+                    feature_values = train_data[feature]
+                    valid_mask = ~(feature_values.isna() | y_train.isna())
+                    if valid_mask.sum() > 10:
+                        corr = feature_values[valid_mask].corr(y_train[valid_mask])
+                        correlations[feature] = corr
+                    else:
+                        correlations[feature] = np.nan
+                except:
+                    correlations[feature] = np.nan
+            else:
+                correlations[feature] = np.nan
+        
+        # Crear DataFrame para el plot
+        plot_data = pd.DataFrame({
+            'feature': list(importance_dict.keys()),
+            'importance': list(importance_dict.values()),
+            'correlation': [correlations.get(f, np.nan) for f in importance_dict.keys()]
+        })
+        
+        # Filtrar features con datos válidos
+        plot_data = plot_data.dropna(subset=['correlation'])
+        
+        if len(plot_data) == 0:
+            ax.text(0.5, 0.5, 'No hay datos\nde correlación', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Análisis de Correlación', fontweight='bold')
+            return
+        
+        # Tomar top 30 features por importance
+        plot_data = plot_data.nlargest(30, 'importance')
+        
+        # Calcular correlación absoluta
+        plot_data['abs_correlation'] = plot_data['correlation'].abs()
+        
+        # Crear scatter plot
+        scatter = ax.scatter(
+            plot_data['importance'], 
+            plot_data['abs_correlation'],
+            s=100, 
+            alpha=0.6,
+            c=plot_data['abs_correlation'],
+            cmap='RdYlGn',
+            edgecolors='black',
+            linewidth=0.5
+        )
+        
+        # Agregar labels para las top 10 features
+        top_10 = plot_data.nlargest(10, 'importance')
+        for _, row in top_10.iterrows():
+            ax.annotate(
+                row['feature'][:15],  # Truncar nombres largos
+                (row['importance'], row['abs_correlation']),
+                xytext=(5, 5),
+                textcoords='offset points',
+                fontsize=7,
+                alpha=0.8
+            )
+        
+        ax.set_xlabel('Feature Importance', fontsize=11, fontweight='bold')
+        ax.set_ylabel('Correlación Absoluta con Assists', fontsize=11, fontweight='bold')
+        ax.set_title('Análisis: Importance vs Correlación (Top 30 Features)', fontweight='bold', fontsize=12)
+        ax.grid(alpha=0.3, linestyle='--')
+        
+        # Agregar colorbar
+        cbar = plt.colorbar(scatter, ax=ax)
+        cbar.set_label('Correlación Absoluta', fontsize=9)
+        
+        # Agregar líneas de referencia
+        ax.axhline(y=0.3, color='orange', linestyle='--', alpha=0.5, label='Correlación Moderada (0.3)')
+        ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.5, label='Correlación Fuerte (0.5)')
+        ax.legend(fontsize=8, loc='upper right')
+        
+        # Estadísticas en el plot
+        mean_corr = plot_data['abs_correlation'].mean()
+        median_corr = plot_data['abs_correlation'].median()
+        stats_text = f'Media: {mean_corr:.3f}\nMediana: {median_corr:.3f}'
+        ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+                verticalalignment='top', fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.8))
+        
+        logger.info(f"✅ Plot de correlación generado con {len(plot_data)} features")
     
     def _plot_model_metrics_summary(self, ax):
         """Resumen de métricas principales del modelo."""
@@ -951,10 +1060,42 @@ MODELOS BASE:
             importance_df['importance_pct'] = (importance_df['importance'] / importance_df['importance'].sum() * 100).round(4)
             importance_df['cumulative_pct'] = importance_df['importance_pct'].cumsum().round(4)
             
+            # Calcular correlación con el target (assists)
+            logger.info("Calculando correlaciones con el target (assists)...")
+            correlations = {}
+            
+            # Obtener datos de entrenamiento
+            train_data = self.df[self.df['Date'] < self.model.cutoff_date].copy()
+            y_train = train_data['assists']
+            
+            for feature in importance_df['feature']:
+                if feature in train_data.columns:
+                    try:
+                        # Calcular correlación de Pearson
+                        feature_values = train_data[feature]
+                        
+                        # Eliminar NaN para el cálculo
+                        valid_mask = ~(feature_values.isna() | y_train.isna())
+                        if valid_mask.sum() > 10:  # Mínimo 10 valores válidos
+                            corr = feature_values[valid_mask].corr(y_train[valid_mask])
+                            correlations[feature] = corr
+                        else:
+                            correlations[feature] = np.nan
+                    except Exception as e:
+                        logger.warning(f"Error calculando correlación para {feature}: {e}")
+                        correlations[feature] = np.nan
+                else:
+                    correlations[feature] = np.nan
+            
+            # Agregar columna de correlación
+            importance_df['correlation'] = importance_df['feature'].map(correlations)
+            importance_df['abs_correlation'] = importance_df['correlation'].abs()
+            
             importance_path = os.path.normpath(os.path.join(self.output_dir, 'feature_importance.csv'))
             importance_df.to_csv(importance_path, index=False)
             
-            logger.info(f" Feature importance exportada: {total_features} features completas en {importance_path}")
+            logger.info(f"✅ Feature importance exportada: {total_features} features completas en {importance_path}")
+            logger.info(f"✅ Correlaciones calculadas: {importance_df['correlation'].notna().sum()} features con correlación válida")
         
         # Crear resumen de archivos generados
         files_summary = {

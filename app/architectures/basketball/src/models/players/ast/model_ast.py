@@ -371,7 +371,10 @@ class StackingASTModel:
 
         # Generar features especializadas para asistencias
         logger.info("Generando características especializadas...")
-        all_features = self.feature_engineer.generate_all_features(df)  # Usar datos filtrados
+        df = self.feature_engineer.generate_all_features(df)  # Retorna DataFrame transformado
+        
+        # Obtener lista de features generadas (columnas nuevas)
+        all_features = [col for col in df.columns if col not in ['player', 'Date', 'Team', 'Opp', 'assists']]
         
         if not all_features:
             raise ValueError("No se pudieron generar features para AST")
@@ -916,46 +919,47 @@ class StackingASTModel:
         if not hasattr(self, 'trained_base_models') or not self.trained_base_models:
             raise ValueError("Modelo no entrenado. Ejecutar train() primero.")
 
-        # Verificar orden cronológico
-        if 'Date' in df.columns:
+       # Verificar orden cronológico antes de generar features
+        if 'Date' in df.columns and 'player' in df.columns:
             if not df['Date'].is_monotonic_increasing:
-                logger.info("Ordenando datos cronológicamente...")
+                logger.info("Reordenando datos cronológicamente para predicción...")
                 df = df.sort_values(['player', 'Date']).reset_index(drop=True)
-        # Generar features (modificar DataFrame directamente)
-        logger.info("Generando features para predicción...")
-        all_features = self.feature_engineer.generate_all_features(df)
+
+        # Generar features (modifica df in-place, retorna List[str])
+        features = self.feature_engineer.generate_all_features(df)
         
-        logger.info(f"Features generadas para predicción: {len(all_features)}")
+        # Determinar expected_features dinámicamente del modelo entrenado
+        try:
+            if hasattr(self, 'expected_features'):
+                expected_features = self.expected_features
+                logger.info(f"Usando expected_features del modelo: {len(expected_features)} features")
+            elif hasattr(self, 'selected_features') and self.selected_features:
+                expected_features = self.selected_features
+                logger.info(f"Usando selected_features del entrenamiento: {len(expected_features)} features")
+            else:
+                # Fallback: usar todas las features generadas
+                expected_features = features
+                logger.warning("No se encontraron expected_features, usando todas las features generadas")
+        except Exception as e:
+            logger.warning(f"Error obteniendo expected_features: {e}")
+            expected_features = features if features else []
         
-        # Usar las features seleccionadas durante el entrenamiento
-        if hasattr(self, 'selected_features') and self.selected_features:
-            expected_features = self.selected_features
-            logger.info(f"Usando {len(expected_features)} features del entrenamiento")
-        else:
-            # Fallback: usar todas las features válidas
-            expected_features = features
-            logger.warning("No se encontraron selected_features, usando todas las features válidas")
-        
-        # Verificar que todas las features estén disponibles
+        # Reordenar DataFrame según expected_features (df ya tiene las features)
         available_features = [f for f in expected_features if f in df.columns]
         if len(available_features) != len(expected_features):
             missing_features = set(expected_features) - set(available_features)
-            logger.warning(f"Features faltantes: {missing_features}")
+            logger.warning(f"Features faltantes ({len(missing_features)}): {list(missing_features)[:5]}...")
             # Agregar features faltantes con valor 0
             for feature in missing_features:
                 df[feature] = 0
                 available_features.append(feature)
         
         # Usar expected_features en el orden correcto
-        features = expected_features
-            
-        logger.info(f"Features ordenadas para predicción: {len(features)}")
+        X = df[expected_features].fillna(0)
         
-        X = df[features].fillna(0)
-
         # Aplicar el scaler antes de predecir (igual que en entrenamiento)
         X_scaled = self.scaler.transform(X)
-        X = pd.DataFrame(X_scaled, columns=features, index=X.index)
+        X = pd.DataFrame(X_scaled, columns=expected_features, index=X.index)
 
         # Validar datos para predicción
         self._validate_training_data(X, pd.Series([0] * len(X)))

@@ -628,24 +628,19 @@ class Stacking3PTModel:
 
         # Generar features especializadas para triples
         logger.info("Generando características especializadas...")
-        features = self.feature_engineer.generate_all_features(df)  # Modificar DataFrame directamente
+        df = self.feature_engineer.generate_all_features(df)  # Retorna DataFrame transformado
+        
+        # Obtener lista de features generadas
+        features = [col for col in df.columns if col not in ['player', 'Date', 'Team', 'Opp', 'three_points_made']]
         
         if not features:
             raise ValueError("No se pudieron generar features para 3PT")
-        
-        logger.info(f"Features seleccionadas: {len(features)}")
-        
+                
         # Preparar datos (ahora df tiene las features)
         X = df[features].fillna(0)
         y = df['three_points_made']
         
-        # FEATURE SELECTION INTELIGENTE - MANTENER EXACTAMENTE 50 FEATURES
-        if len(features) > 50:
-            # Aplicar feature selection para mantener exactamente 50 features
-            selected_features = self._select_top_features_intelligent(X, y, target_features=50)
-        else:
-            # Con 50 o menos features, usar todas
-            selected_features = features
+        selected_features = features
 
         # Actualizar X con features seleccionadas y guardar para predicciones
         X = X[selected_features]
@@ -729,88 +724,6 @@ class Stacking3PTModel:
         self.is_trained = True
         
         return self.validation_metrics
-    
-    def _select_top_features_intelligent(self, X: pd.DataFrame, y: pd.Series, 
-                                     target_features: int = 50) -> List[str]:
-        """
-        Feature selection inteligente usando múltiples criterios:
-        1. Importancia de LightGBM (80% peso)
-        2. Correlación con target (20% peso)
-        3. Eliminar features altamente correlacionadas entre sí (>0.95)
-        
-        Args:
-            X: Features DataFrame
-            y: Target Series
-            target_features: Número objetivo de features (default 50)
-            
-        Returns:
-            Lista de features seleccionadas
-        """
-        
-        # CRITERIO 1: Importancia de modelo rápido (80% peso)
-        lgb_selector = lgb.LGBMRegressor(
-            n_estimators=100,
-            max_depth=4,
-            learning_rate=0.1,
-            subsample=0.8,
-            random_state=42,
-            verbose=-1,
-            n_jobs=1,
-            num_threads=1,
-            device_type='cpu'
-        )
-        
-        lgb_selector.fit(X, y)
-        
-        # Normalizar importancia a 0-1
-        importance_scores = lgb_selector.feature_importances_
-        importance_norm = importance_scores / importance_scores.sum()
-        
-        # CRITERIO 2: Correlación con target (20% peso)
-        correlation_scores = np.abs(X.corrwith(y)).fillna(0).values
-        correlation_norm = correlation_scores / (correlation_scores.sum() + 1e-10)
-        
-        # SCORE COMBINADO
-        combined_score = importance_norm * 0.8 + correlation_norm * 0.2
-        
-        # Crear DataFrame de scores
-        feature_scores = pd.DataFrame({
-            'feature': X.columns,
-            'score': combined_score,
-            'importance': importance_norm,
-            'correlation': correlation_norm
-        }).sort_values('score', ascending=False)
-        
-        # PASO 1: Seleccionar top features por score
-        top_candidates = feature_scores.head(target_features * 2)['feature'].tolist()
-        
-        # PASO 2: Eliminar features altamente correlacionadas entre sí
-        X_candidates = X[top_candidates]
-        corr_matrix = X_candidates.corr().abs()
-        
-        # Encontrar pares con correlación > 0.95
-        upper_triangle = corr_matrix.where(
-            np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
-        )
-        
-        to_drop = set()
-        for column in upper_triangle.columns:
-            correlated_features = upper_triangle[column][upper_triangle[column] > 0.95].index.tolist()
-            if correlated_features:
-                # Mantener la feature con mayor score, eliminar las demás
-                scores_dict = feature_scores.set_index('feature')['score'].to_dict()
-                features_to_compare = [column] + correlated_features
-                features_sorted = sorted(features_to_compare, key=lambda x: scores_dict.get(x, 0), reverse=True)
-                # Eliminar todas excepto la primera (mejor score)
-                to_drop.update(features_sorted[1:])
-        
-        # Features finales: candidatos - correlacionadas
-        final_features = [f for f in top_candidates if f not in to_drop][:target_features]
-        
-        logger.info(f"Feature selection completada: {len(final_features)} features seleccionadas")
-        
-        return final_features
-    
     
     def _temporal_split(self, df: pd.DataFrame, test_size: float = 0.2) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """División temporal de datos respetando cronología"""
@@ -1135,43 +1048,48 @@ class Stacking3PTModel:
         """
         if not hasattr(self, 'trained_base_models') or not hasattr(self, 'meta_learner'):
             raise ValueError("Modelo no entrenado. Ejecutar train() primero.")
+        
+        # Verificar orden cronológico antes de generar features
+        if 'Date' in df.columns and 'player' in df.columns:
+            if not df['Date'].is_monotonic_increasing:
+                logger.info("Reordenando datos cronológicamente para predicción...")
+                df = df.sort_values(['player', 'Date']).reset_index(drop=True)
 
-        # Generar features (modificar DataFrame directamente)
+        # Generar features (modifica df in-place, retorna List[str])
         features = self.feature_engineer.generate_all_features(df)
         
         # Determinar expected_features dinámicamente del modelo entrenado
         try:
             if hasattr(self, 'expected_features'):
                 expected_features = self.expected_features
+                logger.info(f"Usando expected_features del modelo: {len(expected_features)} features")
             elif hasattr(self, 'selected_features') and self.selected_features:
                 expected_features = self.selected_features
+                logger.info(f"Usando selected_features del entrenamiento: {len(expected_features)} features")
             else:
-                # Fallback: usar todas las features numéricas disponibles
-                expected_features = [col for col in df.columns if df[col].dtype in ['int64', 'float64']]
+                # Fallback: usar todas las features generadas
+                expected_features = features
+                logger.warning("No se encontraron expected_features, usando todas las features generadas")
         except Exception as e:
-            logger.warning(f"No se pudieron obtener expected_features: {e}")
+            logger.warning(f"Error obteniendo expected_features: {e}")
             expected_features = features if features else []
         
-        # Reordenar DataFrame según expected_features
+        # Reordenar DataFrame según expected_features (df ya tiene las features)
         available_features = [f for f in expected_features if f in df.columns]
-        missing_features = [f for f in expected_features if f not in df.columns]
-        
-        if missing_features:
-            logger.warning(f"Features faltantes: {missing_features}")
+        if len(available_features) != len(expected_features):
+            missing_features = set(expected_features) - set(available_features)
+            logger.warning(f"Features faltantes ({len(missing_features)}): {list(missing_features)[:5]}...")
             # Agregar features faltantes con valor 0
             for feature in missing_features:
                 df[feature] = 0
-            available_features = expected_features
+                available_features.append(feature)
         
-        # Preparar datos
-        X = df[available_features].fillna(0)
+        # Usar expected_features en el orden correcto
+        X = df[expected_features].fillna(0)
         
-        # Aplicar escalado
-        X_scaled = pd.DataFrame(
-            self.scaler.transform(X),
-            columns=available_features,
-            index=X.index
-        )
+        # Aplicar el scaler antes de predecir (igual que en entrenamiento)
+        X_scaled = self.scaler.transform(X)
+        X = pd.DataFrame(X_scaled, columns=expected_features, index=X.index)
         
         # Realizar predicción usando stacking OOF
         predictions = self._predict_with_stacking(X_scaled)

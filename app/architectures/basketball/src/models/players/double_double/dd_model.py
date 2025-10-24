@@ -1947,44 +1947,50 @@ class DoubleDoubleModel:
         if not self.is_fitted:
             raise ValueError("Modelo no está entrenado")
         
-        # Generar features especializadas OBLIGATORIAS
-        df_with_features = df.copy()
+        # Verificar orden cronológico antes de generar features
+        if 'Date' in df.columns and 'player' in df.columns:
+            if not df['Date'].is_monotonic_increasing:
+                self.logger.info("Reordenando datos cronológicamente para predicción...")
+                df = df.sort_values(['player', 'Date']).reset_index(drop=True)
         
+        # Generar features especializadas (modifica df in-place, retorna List[str])
+        self.logger.info("Generando features especializadas para predicción...")
+        specialized_features = self.feature_engineer.generate_all_features(df)
+
+        # Determinar expected_features dinámicamente del modelo entrenado
         try:
-            self.logger.info("Generando features especializadas para predicción...")
-            specialized_features = self.feature_engineer.generate_all_features(df_with_features)
-            self.logger.info(f"Features especializadas generadas: {len(specialized_features)}")
-            
-            # VERIFICAR que se generaron correctamente
-            if len(specialized_features) < 15:
-                self.logger.error(f"INSUFICIENTES features especializadas para predicción: {len(specialized_features)}")
-                raise ValueError(f"No se pudieron generar suficientes features especializadas para predicción")
-            
+            if 'feature_columns' in self.training_results:
+                expected_features = self.training_results['feature_columns']
+                self.logger.info(f"Usando feature_columns del training: {len(expected_features)} features")
+            elif hasattr(self, 'feature_columns'):
+                expected_features = self.feature_columns
+                self.logger.info(f"Usando feature_columns del modelo: {len(expected_features)} features")
+            elif hasattr(self, 'expected_features'):
+                expected_features = self.expected_features
+                self.logger.info(f"Usando expected_features: {len(expected_features)} features")
+            else:
+                # Fallback: usar las features que se acaban de generar
+                expected_features = specialized_features
+                self.logger.warning("No se encontraron expected_features, usando todas las features generadas")
         except Exception as e:
-            self.logger.error(f"ERROR CRÍTICO generando features para predicción: {str(e)}")
-            raise ValueError(f"FALLO CRÍTICO: No se pudieron generar features especializadas para predicción. Error: {str(e)}")
+            self.logger.warning(f"Error obteniendo expected_features: {e}")
+            expected_features = specialized_features
         
-        # Usar EXCLUSIVAMENTE las features especializadas entrenadas
-        if 'feature_columns' in self.training_results:
-            feature_columns = self.training_results['feature_columns']
-        elif hasattr(self, 'feature_columns'):
-            feature_columns = self.feature_columns
-        else:
-            # Fallback: usar las features que se acaban de generar
-            self.logger.warning("feature_columns no encontrada en training_results, usando features generadas")
-            feature_columns = specialized_features
-            self.logger.info(f"Usando {len(feature_columns)} features del feature engineer")
+        # Reordenar DataFrame según expected_features (df ya tiene las features)
+        available_features = [f for f in expected_features if f in df.columns]
+        if len(available_features) != len(expected_features):
+            missing_features = set(expected_features) - set(available_features)
+            self.logger.warning(f"Features faltantes ({len(missing_features)}): {list(missing_features)[:5]}...")
+            # Agregar features faltantes con valor 0
+            for feature in missing_features:
+                df[feature] = 0
+                available_features.append(feature)
         
-        # VERIFICAR que todas las features requeridas están disponibles
-        missing_features = [f for f in feature_columns if f not in df_with_features.columns]
-        if missing_features:
-            self.logger.error(f"Features especializadas faltantes para predicción: {missing_features}")
-            raise ValueError(f"Features especializadas requeridas no disponibles: {missing_features}")
-        
-        X = df_with_features[feature_columns].copy()
+        # Usar expected_features en el orden correcto
+        X = df[expected_features].copy()
         X_scaled = DataProcessor.prepare_prediction_data(X, self.scaler)
         
-        self.logger.info(f"Predicción usando {len(feature_columns)} features especializadas")
+        self.logger.info(f"Predicción usando {len(expected_features)} features especializadas")
         
         # Usar meta-learning avanzado si está habilitado
         if hasattr(self, 'use_combined_prediction') and self.use_combined_prediction:
@@ -2020,7 +2026,6 @@ class DoubleDoubleModel:
         # Optimizar modelos principales
         self._optimize_xgboost_bayesian(X_train, y_train, calls_per_model)
         self._optimize_lightgbm_bayesian(X_train, y_train, calls_per_model)
-        self._optimize_neural_net_bayesian(X_train, y_train, calls_per_model)
     
     def _optimize_xgboost_bayesian(self, X_train, y_train, n_calls=10):
         """Optimización bayesiana específica para XGBoost con validación cronológica"""
@@ -2689,41 +2694,6 @@ class DoubleDoubleModel:
         model = joblib.load(filepath)
         logger.info(f"Modelo Double Double cargado: {filepath}")
         return model
-
-    def get_training_summary(self) -> Dict[str, Any]:
-        """Obtener resumen completo del entrenamiento"""
-        
-        if not self.is_fitted:
-            return {"error": "Modelo no está entrenado"}
-        
-        summary = {
-            'model_info': {
-                'total_models': len(self.training_results.get('individual_models', {})),
-                'stacking_enabled': self.stacking_model is not None,
-                'bayesian_optimization': bool(getattr(self, 'bayesian_results', {})),
-                'gpu_used': self.gpu_config.get('selected_device', 'cpu') != 'cpu'
-            },
-            'training_data': {
-                'training_samples': self.training_results.get('training_samples', 0),
-                'validation_samples': self.training_results.get('validation_samples', 0),
-                'total_features': len(self.training_results.get('feature_columns', []))
-            },
-            'model_performance': {},
-            'cross_validation': self.cv_scores,
-            'feature_importance_available': bool(self.feature_importance)
-        }
-        
-        # Agregar métricas de modelos individuales
-        for name, model_info in self.training_results.get('individual_models', {}).items():
-            if 'val_metrics' in model_info:
-                summary['model_performance'][name] = model_info['val_metrics']
-        
-        # Agregar métricas de stacking
-        if 'stacking_metrics' in self.training_results:
-            summary['model_performance']['stacking'] = self.training_results['stacking_metrics']
-        
-        return summary
-
 
     def _calculate_optimal_threshold_advanced(self, y_true, y_proba, method='f1_precision_balance'):
         """

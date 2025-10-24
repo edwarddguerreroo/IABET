@@ -87,13 +87,14 @@ class ReboundsFeatureEngineer:
         """
         Cálculo rolling optimizado con validación robusta de índices
         SIEMPRE usa shift(1) para prevenir data leakage (futuros juegos)
+        SIN FALLBACKS - Retorna NaN si la columna no existe
         """
         # Validar entrada
         if not isinstance(df, pd.DataFrame):
             raise ValueError("df debe ser un DataFrame")
         if column not in df.columns:
-            logger.warning(f" Columna '{column}' no encontrada, retornando ceros")
-            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+            logger.warning(f"Columna '{column}' no encontrada, retornando NaN")
+            return pd.Series(np.nan, index=df.index, name=f"{column}_{window}_{operation}")
         
         # Validar que df esté ordenado cronológicamente
         if 'Date' in df.columns and not df['Date'].is_monotonic_increasing:
@@ -102,15 +103,15 @@ class ReboundsFeatureEngineer:
         # Calcular rolling con validación de índices
         try:
             if operation == 'mean':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1)
             elif operation == 'std':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=2).std().shift(1).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=2).std().shift(1)
             elif operation == 'max':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).max().shift(1).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).max().shift(1)
             elif operation == 'sum':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).sum().shift(1).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).sum().shift(1)
             else:
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1)
             
             # Validar que result tenga MultiIndex
             if isinstance(result.index, pd.MultiIndex):
@@ -120,18 +121,18 @@ class ReboundsFeatureEngineer:
             # Validar alineación de índices antes de reindex
             if not result.index.equals(df.index):
                 logger.debug(f"Reindexando {column}_{window}_{operation} para alinear índices")
-                result = result.reindex(df.index, fill_value=0)
+                result = result.reindex(df.index)
             
             # Validar resultado final
             if len(result) != len(df):
-                logger.error(f" Error: Longitud de resultado ({len(result)}) != DataFrame ({len(df)})")
-                return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+                logger.error(f"Error: Longitud de resultado ({len(result)}) != DataFrame ({len(df)})")
+                return pd.Series(np.nan, index=df.index, name=f"{column}_{window}_{operation}")
             
             return result
             
         except Exception as e:
-            logger.error(f" Error calculando {column}_{window}_{operation}: {e}")
-            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+            logger.error(f"Error calculando {column}_{window}_{operation}: {e}")
+            return pd.Series(np.nan, index=df.index, name=f"{column}_{window}_{operation}")
 
     def _convert_mp_to_numeric(self, df: pd.DataFrame) -> None:
         """Asegura que la columna 'minutes' esté disponible y en formato decimal"""
@@ -216,9 +217,6 @@ class ReboundsFeatureEngineer:
         # 10. FEATURES PREDICTIVAS AVANZADAS (dependen de todas las anteriores)
         self._add_advanced_predictive_features(df)
         
-        # Limpiar valores infinitos y NaN
-        self._clean_infinite_values(df)
-        
         # Limpiar columnas temporales
         temp_cols = [col for col in df.columns if col.startswith('_temp_')]
         if temp_cols:
@@ -280,17 +278,17 @@ class ReboundsFeatureEngineer:
             # Promedio histórico de intentos
             if self._register_feature('player_fga_5g', 'shooting_efficiency'):
                 fga_hist = self._get_historical_series(df, 'field_goals_att', window=5, operation='mean')
-                df['player_fga_5g'] = fga_hist.fillna(10.0)  # Promedio NBA típico
+                df['player_fga_5g'] = fga_hist
                 
-        # TIROS DE 3 PUNTOS (Rebotes más largos según investigación) - CORREGIDO SIN DATA LEAKAGE
+        # TIROS DE 3 PUNTOS (         if Rebotes más largos según investigación) - CORREGIDO SIN DATA LEAKAGE
         if 'three_points_att' in df.columns and 'field_goals_att' in df.columns:
             # Proporción de tiros de 3 HISTÓRICA
             if self._register_feature('three_point_rate', 'shooting_efficiency'):
                 # Usar valores históricos en lugar de actuales
                 three_pa_hist = self._get_historical_series(df, 'three_points_att', window=5, operation='mean')
                 fga_hist = self._get_historical_series(df, 'field_goals_att', window=5, operation='mean')
-                three_rate = three_pa_hist / (fga_hist + 0.1)  # Evitar división por 0
-                df['three_point_rate'] = three_rate.fillna(0)
+                fga_hist_adjusted = fga_hist.replace(0, np.nan)
+                df['three_point_rate'] = three_pa_hist / fga_hist_adjusted
 
          # Promedio de rebotes histórico MEJORADO 
         if 'rebounds' in df.columns:
@@ -311,23 +309,22 @@ class ReboundsFeatureEngineer:
                 trb_2g = self._get_historical_series(df, 'rebounds', window=2, operation='mean')
                 trb_4g = self._get_historical_series(df, 'rebounds', window=4, operation='mean')
                 # Aproximar weighted average: más peso a recientes
-                trb_weighted_recent = (trb_2g * 0.7 + trb_4g * 0.3).fillna(trb_long)
-                df['trb_weighted_recent'] = trb_weighted_recent
+                df['trb_weighted_recent'] = trb_2g * 0.7 + trb_4g * 0.3
             
             # ELITE PLAYER FEATURES - CORREGIDO usando _get_historical_series
             # Explosiveness Factor - Detecta capacidad de juegos excepcionales
             if self._register_feature('explosiveness_factor', 'shooting_efficiency'):
                 trb_max_7 = self._get_historical_series(df, 'rebounds', window=7, operation='max')
                 trb_avg_7 = self._get_historical_series(df, 'rebounds', window=7, operation='mean')
-                explosiveness_factor = ((trb_max_7 - trb_avg_7) / (trb_long + 1e-6)).clip(0, 2.0).fillna(0)
-                df['explosiveness_factor'] = explosiveness_factor
+                trb_long_adjusted = trb_long.replace(0, np.nan)
+                df['explosiveness_factor'] = ((trb_max_7 - trb_avg_7) / trb_long_adjusted).clip(0, 2.0)
             
             # Elite Pressure Response - SIMPLIFICADO usando consistencia
             if self._register_feature('elite_pressure_response', 'shooting_efficiency'):
                 trb_std_7 = self._get_historical_series(df, 'rebounds', window=7, operation='std')
                 # Menor desviación = mejor respuesta bajo presión
-                elite_pressure_response = (trb_long / (trb_std_7 + 1.0)).clip(0, 3.0).fillna(1.0)
-                df['elite_pressure_response'] = elite_pressure_response
+                trb_std_adjusted = trb_std_7.replace(0, np.nan)
+                df['elite_pressure_response'] = (trb_long / trb_std_adjusted).clip(0, 3.0)
             
             # Dynamic Scoring Ceiling - Se adapta al rango de scoring del jugador
             scoring_tier = (trb_long // 5).clip(0, 8)  # Tiers: 0-5, 5-10, ..., 35-40
@@ -337,7 +334,8 @@ class ReboundsFeatureEngineer:
             self._register_feature('dynamic_scoring_ceiling', 'shooting_efficiency')
             
             # Enhanced weighted average con ajuste por forma reciente
-            recent_form_multiplier = 1 + (trb_short - trb_long) / (trb_long + 5) * 0.3
+            trb_long_adjusted = trb_long.replace(0, np.nan)
+            recent_form_multiplier = 1 + (trb_short - trb_long) / trb_long_adjusted * 0.3
             trb_long_enhanced = trb_long * recent_form_multiplier.clip(0.7, 1.4)
             df['trb_long_enhanced'] = trb_long_enhanced
             
@@ -352,12 +350,11 @@ class ReboundsFeatureEngineer:
                 player_tier = (trb_long / 5.0).clip(0, 3)  # 0-3 tiers más simple
                 
                 # Combinar con pesos adaptativos simples
-                contextual_adaptive_trb = (
+                df['contextual_adaptive_trb'] = (
                     trb_immediate * (0.2 + player_tier * 0.05) +  # Más peso a inmediato para tier alto
                     trb_medium * (0.5 - player_tier * 0.05) +     # Menos peso a medio para tier alto  
                     trb_explosive * (0.3 + player_tier * 0.02)    # Más peso a explosivo para tier alto
-                ).fillna(trb_long)
-                df['contextual_adaptive_trb'] = contextual_adaptive_trb
+                )
             
             self._register_feature('trb_long_enhanced', 'shooting_efficiency')  # 1.92% importance
 
@@ -368,10 +365,9 @@ class ReboundsFeatureEngineer:
             trb_avg = self._get_historical_series(df, 'rebounds', self.windows['medium'], 'mean')
             
             # Eficiencia por minuto con boost por high minutes
-            # División simple con manejo de ceros
-            with np.errstate(divide='ignore', invalid='ignore'):
-                base_efficiency = trb_avg / (mp_avg + 1)
-                base_efficiency = base_efficiency.fillna(0).replace([np.inf, -np.inf], 0)
+            mp_avg_adjusted = mp_avg.replace(0, np.nan)
+            base_efficiency = trb_avg / mp_avg_adjusted
+            
             minutes_multiplier = np.where(mp_avg >= 32, 1.25,      # Elite starters
                                 np.where(mp_avg >= 28, 1.15,       # Strong starters  
                                 np.where(mp_avg >= 20, 1.0,        # Normal
@@ -386,38 +382,43 @@ class ReboundsFeatureEngineer:
         """
         Features de ventaja física - PRINCIPIO FUNDAMENTAL
         Altura y físico son determinantes clave en rebotes
+        SIN FALLBACKS - usa solo datos reales
         """
         logger.debug("Creando features de ventaja física...")
         
         # VENTAJA FÍSICA COMPUESTA (evitar duplicación)
         if 'Height_Inches' in df.columns and 'Weight' in df.columns:
             if 'physical_dominance_index' not in df.columns:
-                height_norm = (df['Height_Inches'] - df['Height_Inches'].min()) / (df['Height_Inches'].max() - df['Height_Inches'].min())
-                weight_norm = (df['Weight'] - df['Weight'].min()) / (df['Weight'].max() - df['Weight'].min())
-                df['physical_dominance_index'] = (height_norm * 0.7 + weight_norm * 0.3).fillna(0.5)
+                height_min = df['Height_Inches'].min()
+                height_max = df['Height_Inches'].max()
+                weight_min = df['Weight'].min()
+                weight_max = df['Weight'].max()
+                
+                height_norm = (df['Height_Inches'] - height_min) / (height_max - height_min) if height_max > height_min else pd.Series(np.nan, index=df.index)
+                weight_norm = (df['Weight'] - weight_min) / (weight_max - weight_min) if weight_max > weight_min else pd.Series(np.nan, index=df.index)
+                df['physical_dominance_index'] = height_norm * 0.7 + weight_norm * 0.3
                 self._register_feature('physical_dominance_index', 'physical_advantage')
                         
             # 4. Physical Efficiency (productividad por ventaja física) - HISTÓRICO
             if 'rebounds' in df.columns and self._register_feature('physical_efficiency', 'physical_advantage'):
                 # TRB histórico por unidad de ventaja física - SIN DATA LEAKAGE
                 trb_hist = self._get_historical_series(df, 'rebounds', window=5, operation='mean')
-                trb_per_physical = trb_hist / (df['physical_dominance_index'] + 0.1)
-                df['physical_efficiency'] = trb_per_physical.fillna(5.0)  # Promedio TRB típico
+                physical_idx_adjusted = df['physical_dominance_index'].replace(0, np.nan)
+                df['physical_efficiency'] = trb_hist / physical_idx_adjusted
             
             # 5. Physical Dominance Momentum
             if self._register_feature('physical_dominance_momentum', 'physical_advantage'):
                 # Cómo la ventaja física se traduce en rendimiento reciente
                 if 'rebounds' in df.columns:
                     trb_recent = self._get_historical_series(df, 'rebounds', window=3, operation='mean')
-                    expected_trb_by_physical = df['physical_dominance_index'] * 15  # Aproximación
-                    df['physical_dominance_momentum'] = (trb_recent - expected_trb_by_physical).fillna(0)
-                else:
-                    df['physical_dominance_momentum'] = 0
+                    trb_long = self._get_historical_series(df, 'rebounds', window=10, operation='mean')
+                    df['physical_dominance_momentum'] = trb_recent - trb_long
     
     def _create_positioning_features(self, df: pd.DataFrame) -> None:
         """
         Features de posicionamiento - PRINCIPIO FUNDAMENTAL
         Minutos jugados y posición determinan oportunidades de rebote
+        SIN FALLBACKS - usa solo datos reales
         """
         logger.debug("Creando features de posicionamiento...")
         
@@ -425,57 +426,55 @@ class ReboundsFeatureEngineer:
         if 'minutes' in df.columns:
             # Promedio histórico de minutos
             if self._register_feature('minutes_avg_5g', 'positioning'):
-                mp_hist = self._get_historical_series(df, 'minutes', window=5, operation='mean')
-                df['minutes_avg_5g'] = mp_hist.fillna(25.0)  # Minutos promedio típicos
+                df['minutes_avg_5g'] = self._get_historical_series(df, 'minutes', window=5, operation='mean')
 
             # 2. Estabilidad de minutos (consistencia en el rol)
             if self._register_feature('minutes_stability', 'positioning'):
                 mp_std = self._get_historical_series(df, 'minutes', window=7, operation='std')
                 mp_avg = self._get_historical_series(df, 'minutes', window=7, operation='mean')
                 # Coeficiente de variación inverso (mayor estabilidad = menor variación)
-                df['minutes_stability'] = 1 / (1 + mp_std / (mp_avg + 0.1))
-                df['minutes_stability'] = df['minutes_stability'].fillna(0.5)
+                mp_avg_adjusted = mp_avg.replace(0, np.nan)
+                df['minutes_stability'] = 1 / (1 + mp_std / mp_avg_adjusted)
             
             # 3. Minutes Rate vs expectativa por posición - HISTÓRICO
             if 'Height_Inches' in df.columns and self._register_feature('minutes_vs_position', 'positioning'):
                 # Jugadores más altos típicamente juegan más minutos (centros/forwards)
                 height_percentile = df['Height_Inches'].rank(pct=True)
-                expected_minutes = 20 + height_percentile * 15  # 20-35 min basado en altura
+                expected_minutes = height_percentile * 48  # Basado en altura, rango 0-48 minutos
                 # Usar minutos históricos - SIN DATA LEAKAGE
                 mp_hist = self._get_historical_series(df, 'minutes', window=5, operation='mean')
-                df['minutes_vs_position'] = mp_hist / (expected_minutes + 0.1)
+                expected_minutes_adjusted = expected_minutes.replace(0, np.nan)
+                df['minutes_vs_position'] = mp_hist / expected_minutes_adjusted
             
             # 4. Tendencia de minutos (creciente/decreciente)
             if self._register_feature('minutes_trend', 'positioning'):
                 mp_recent = self._get_historical_series(df, 'minutes', window=3, operation='mean')
                 mp_long = self._get_historical_series(df, 'minutes', window=10, operation='mean')
-                df['minutes_trend'] = (mp_recent - mp_long).fillna(0)
+                df['minutes_trend'] = mp_recent - mp_long
             
             # 5. Minutes Rate en contexto de equipo - SIMPLIFICADO
             if self._register_feature('minutes_team_share', 'positioning'):
                 # Proporción histórica de minutos jugados (simplificado)
                 mp_hist = self._get_historical_series(df, 'minutes', window=5, operation='mean')
-                # Usar 240 como baseline (5 jugadores x 48 min) - método más eficiente
-                df['minutes_team_share'] = (mp_hist / 240.0).fillna(0.2)  # ~20% promedio
+                df['minutes_team_share'] = mp_hist / 240.0
             
             # 6. Minutes Efficiency Score (minutos + productividad) - HISTÓRICO
             if 'rebounds' in df.columns and self._register_feature('minutes_efficiency_score', 'positioning'):
                 # Usar datos históricos - SIN DATA LEAKAGE
                 trb_hist = self._get_historical_series(df, 'rebounds', window=5, operation='mean')
                 mp_hist = self._get_historical_series(df, 'minutes', window=5, operation='mean')
-                trb_per_minute = trb_hist / (mp_hist + 0.1)
-                minutes_factor = np.minimum(mp_hist / 30.0, 1.5)  # Cap en 1.5x promedio
-                # Score que combina minutos históricos y productividad por minuto histórica
-                df['minutes_efficiency_score'] = (minutes_factor * 0.4 + trb_per_minute * 10 * 0.6).fillna(1.0)
+                mp_hist_adjusted = mp_hist.replace(0, np.nan)
+                trb_per_minute = trb_hist / mp_hist_adjusted
+                minutes_factor = np.minimum(mp_hist / 30.0, 1.5)
+                df['minutes_efficiency_score'] = minutes_factor * 0.4 + trb_per_minute * 10 * 0.6
             
             # 7. Minutes Load Management (fatiga/descanso)
             if self._register_feature('minutes_load_factor', 'positioning'):
                 # Factor de carga basado en minutos recientes vs promedio
                 mp_recent_3g = self._get_historical_series(df, 'minutes', window=3, operation='mean')
                 mp_season_avg = self._get_historical_series(df, 'minutes', window=20, operation='mean')
-                load_factor = mp_recent_3g / (mp_season_avg + 0.1)
-                # Normalizar para que 1.0 = carga normal
-                df['minutes_load_factor'] = load_factor.fillna(1.0)
+                mp_season_avg_adjusted = mp_season_avg.replace(0, np.nan)
+                df['minutes_load_factor'] = mp_recent_3g / mp_season_avg_adjusted
         
         # POSICIÓN EN CANCHA (Basado en estadísticas)
         if 'blocks' in df.columns and 'assists' in df.columns:
@@ -489,11 +488,14 @@ class ReboundsFeatureEngineer:
                 blk_max_hist = blk_hist.rolling(window=20, min_periods=1).max()
                 ast_max_hist = ast_hist.rolling(window=20, min_periods=1).max()
                 
-                blk_norm = blk_hist / (blk_max_hist + 0.1)
-                ast_norm = ast_hist / (ast_max_hist + 0.1)
+                blk_max_adjusted = blk_max_hist.replace(0, np.nan)
+                ast_max_adjusted = ast_max_hist.replace(0, np.nan)
+                
+                blk_norm = blk_hist / blk_max_adjusted
+                ast_norm = ast_hist / ast_max_adjusted
                 
                 # Más bloqueos y menos asistencias = juego más interior
-                df['interior_play_index'] = (blk_norm - ast_norm * 0.5).fillna(0)
+                df['interior_play_index'] = blk_norm - ast_norm * 0.5
                         
             # 2. Interior Play vs Physical Dominance (sinergia) - HISTÓRICO
             if 'Height_Inches' in df.columns and 'Weight' in df.columns and 'blocks' in df.columns:
@@ -503,8 +505,9 @@ class ReboundsFeatureEngineer:
                     blk_hist = self._get_historical_series(df, 'blocks', window=5, operation='mean')
                     # Usar máximo histórico para evitar data leakage
                     blk_max_hist = blk_hist.rolling(window=20, min_periods=1).max()
-                    blk_factor = blk_hist / (blk_max_hist + 0.1)
-                    df['interior_physical_synergy'] = (height_factor * 0.6 + blk_factor * 0.4).fillna(0.5)
+                    blk_max_adjusted = blk_max_hist.replace(0, np.nan)
+                    blk_factor = blk_hist / blk_max_adjusted
+                    df['interior_physical_synergy'] = height_factor * 0.6 + blk_factor * 0.4
 
     def _create_minutes_projection_critical(self, df: pd.DataFrame) -> None:
         """
@@ -516,47 +519,56 @@ class ReboundsFeatureEngineer:
         3. Output: minutos esperados en próximo partido (0-48)
         
         Esta es LA feature más importante según benchmarks comerciales (~30-40% peso)
+        SIN FALLBACKS - usa solo datos reales
         """
         if self._register_feature('minutes_projected', 'positioning'):
             # BASE: Promedio reciente ponderado (más peso a partidos recientes)
             mp_3g = self._get_historical_series(df, 'minutes', window=3, operation='mean')
             mp_10g = self._get_historical_series(df, 'minutes', window=10, operation='mean')
-            mp_base = (mp_3g * 0.6 + mp_10g * 0.4).fillna(25.0)  # Fallback: 25 min promedio NBA
+            mp_base = mp_3g * 0.6 + mp_10g * 0.4
             
             # AJUSTE 1: Back-to-back penalty
-            # Jugadores descansan 12% menos minutos en segundo partido consecutivo
+            # Jugadores descansan menos minutos en segundo partido consecutivo
             if 'days_rest' in df.columns:
                 b2b_penalty = np.where(df['days_rest'] <= 1, 0.88, 1.0)
             else:
                 b2b_penalty = 1.0
             
             # AJUSTE 2: Home court advantage
-            # Jugadores juegan 4% más en casa (mejor condición física, menos viaje)
+            # Jugadores juegan más en casa (mejor condición física, menos viaje)
             if 'is_home' in df.columns:
                 home_boost = np.where(df['is_home'] == 1, 1.04, 0.97)
             else:
                 home_boost = 1.0
             
-            # AJUSTE 3: Opponent strength
-            # Contra defensas elite (defensive rating <107): +6% minutos (juegos competitivos)
-            # Contra defensas débiles (>113): -4% minutos (blowouts probables)
+            # AJUSTE 3: Opponent strength - basado en datos reales
             if 'opp_defensive_rating_real' in df.columns:
                 opp_rating = df['opp_defensive_rating_real']
-                opp_factor = np.where(opp_rating < 107, 1.06,
-                             np.where(opp_rating > 113, 0.96, 1.0))
+                opp_mean = opp_rating.mean()
+                opp_std = opp_rating.std()
+                if opp_std > 0:
+                    # Factor dinámico basado en desviaciones estándar
+                    z_score = (opp_rating - opp_mean) / opp_std
+                    opp_factor = 1.0 - (z_score * 0.02)  # ±2% por cada std
+                else:
+                    opp_factor = 1.0
             else:
                 opp_factor = 1.0
             
-            # AJUSTE 4: Pace del oponente
-            # Equipos de pace alto (>102 posesiones) = más minutos por más rotaciones
-            # Pace bajo (<98) = menos minutos por juego más lento
+            # AJUSTE 4: Pace del oponente - basado en datos reales
             if 'opp_pace_real' in df.columns:
-                pace_norm = df['opp_pace_real'] / 100.0  # Normalizar a 1.0
-                pace_factor = (0.95 + pace_norm * 0.1).clip(0.95, 1.05)
+                pace_mean = df['opp_pace_real'].mean()
+                pace_std = df['opp_pace_real'].std()
+                if pace_std > 0 and pace_mean > 0:
+                    # Factor dinámico basado en pace real
+                    pace_norm = df['opp_pace_real'] / pace_mean
+                    pace_factor = pace_norm.clip(0.90, 1.10)
+                else:
+                    pace_factor = 1.0
             else:
                 pace_factor = 1.0
             
-            # PROYECCIÓN FINAL: Multiplicar todos los factores de forma simple
+            # PROYECCIÓN FINAL: Multiplicar todos los factores
             # Convertir todos los arrays a Series con el mismo índice
             if not isinstance(b2b_penalty, pd.Series):
                 b2b_penalty = pd.Series(b2b_penalty, index=df.index)
@@ -570,17 +582,18 @@ class ReboundsFeatureEngineer:
             minutes_proj = mp_base * b2b_penalty * home_boost * opp_factor * pace_factor
             df['minutes_projected'] = minutes_proj.clip(0, 48)  # Hard limit: 48 min máximo
             
-            logger.debug(f"minutes_projected creado: mean={minutes_proj.mean():.1f}, std={minutes_proj.std():.1f}")
+            if not minutes_proj.isna().all():
+                logger.debug(f"minutes_projected creado: mean={minutes_proj.mean():.1f}, std={minutes_proj.std():.1f}")
         
         # FEATURE DERIVADA: Delta de proyección (momentum de minutos)
         # Detecta jugadores con minutos crecientes/decrecientes
         if self._register_feature('minutes_projection_delta', 'positioning'):
             if 'minutes_projected' in df.columns:
                 mp_10g = self._get_historical_series(df, 'minutes', window=10, operation='mean')
-                df['minutes_projection_delta'] = (df['minutes_projected'] - mp_10g).fillna(0)
+                df['minutes_projection_delta'] = df['minutes_projected'] - mp_10g
         
         # Estadísticas de diagnóstico
-        if 'minutes_projected' in df.columns:
+        if 'minutes_projected' in df.columns and not df['minutes_projected'].isna().all():
             stats = df['minutes_projected'].describe()
             logger.info(f"Minutes projected stats: mean={stats['mean']:.1f}, std={stats['std']:.1f}, min={stats['min']:.1f}, max={stats['max']:.1f}")
 
@@ -598,8 +611,7 @@ class ReboundsFeatureEngineer:
         for window in [3, 5, 10]:
             feature_name = f'trb_avg_{window}g'
             if self._register_feature(feature_name, 'rebounding_history'):
-                trb_hist = self._get_historical_series(df, 'rebounds', window=window, operation='mean')
-                df[feature_name] = trb_hist.fillna(df['rebounds'].mean())
+                df[feature_name] = self._get_historical_series(df, 'rebounds', window=window, operation='mean')
                 
         # TRB promedio ponderado por minutos jugados
         if 'minutes' in df.columns:
@@ -608,7 +620,8 @@ class ReboundsFeatureEngineer:
                 if self._register_feature(feature_name, 'rebounding_history'):
                     trb_hist = self._get_historical_series(df, 'rebounds', window=window, operation='mean')
                     mp_hist = self._get_historical_series(df, 'minutes', window=window, operation='mean')
-                    df[feature_name] = (trb_hist / (mp_hist + 0.1)).fillna(0.3)  # TRB por minuto
+                    mp_hist_adjusted = mp_hist.replace(0, np.nan)
+                    df[feature_name] = trb_hist / mp_hist_adjusted
         
         # ELIMINADO: TRB pace adjusted - REDUNDANTE con opp_pace_real y trb_pace_interaction
         # Ahora se maneja de manera más precisa en opponent_context_features
@@ -619,8 +632,8 @@ class ReboundsFeatureEngineer:
                 if self._register_feature(feature_name, 'rebounding_history'):
                     trb_hist = self._get_historical_series(df, 'rebounds', window=window, operation='mean')
                     # Expectativa basada en altura (jugadores más altos esperan más rebotes)
-                    height_expectation = (df['Height_Inches'] - 70) * 0.5  # Aproximación lineal
-                    df[feature_name] = (trb_hist - height_expectation.fillna(5)).fillna(0)
+                    trb_avg_per_inch = df.groupby('Height_Inches')['rebounds'].transform(lambda x: x.expanding().mean().shift(1))
+                    df[feature_name] = trb_hist - trb_avg_per_inch
         
         # Aceleración de TRB (cambio en la tendencia)
         if self._register_feature('trb_acceleration', 'rebounding_history'):
@@ -630,7 +643,7 @@ class ReboundsFeatureEngineer:
             # Aceleración: cambio en la tendencia
             trend_recent = trb_recent - trb_mid
             trend_long = trb_mid - trb_long
-            df['trb_acceleration'] = (trend_recent - trend_long).fillna(0)
+            df['trb_acceleration'] = trend_recent - trend_long
         
         # ELIMINADO: TRB vs opponent - DUPLICADO con trb_vs_opp_trend 
         # Ahora se maneja de manera más avanzada en opponent_context_features
@@ -640,18 +653,13 @@ class ReboundsFeatureEngineer:
             trb_5g = self._get_historical_series(df, 'rebounds', window=5, operation='mean')
             trb_10g = self._get_historical_series(df, 'rebounds', window=10, operation='mean')
             # Score ponderado de momentum
-            momentum_score = (
-                (trb_3g - trb_5g) * 0.5 +  # Tendencia reciente
-                (trb_5g - trb_10g) * 0.3 +  # Tendencia media
-                (trb_3g - trb_10g) * 0.2    # Tendencia general
-            )
-            df['trb_momentum_score'] = momentum_score.fillna(0)
+            df['trb_momentum_score'] = (trb_3g - trb_5g) * 0.5 + (trb_5g - trb_10g) * 0.3 + (trb_3g - trb_10g) * 0.2
         
         # TENDENCIA RECIENTE
         if self._register_feature('trb_trend', 'rebounding_history'):
             trb_recent = self._get_historical_series(df, 'rebounds', window=3, operation='mean')
             trb_long = self._get_historical_series(df, 'rebounds', window=10, operation='mean')
-            df['trb_trend'] = (trb_recent - trb_long).fillna(0)
+            df['trb_trend'] = trb_recent - trb_long
         
         # REBOTES OFENSIVOS vs DEFENSIVOS (Si disponible) - CORREGIDO SIN DATA LEAKAGE
         if 'offensive_rebounds' in df.columns and 'defensive_rebounds' in df.columns:
@@ -659,8 +667,8 @@ class ReboundsFeatureEngineer:
             if self._register_feature('orb_rate', 'rebounding_history'):
                 orb_hist = self._get_historical_series(df, 'offensive_rebounds', window=5, operation='mean')
                 trb_hist = self._get_historical_series(df, 'rebounds', window=5, operation='mean')
-                orb_rate = orb_hist / (trb_hist + 0.1)
-                df['orb_rate'] = orb_rate.fillna(0.3)  # Promedio típico
+                trb_hist_adjusted = trb_hist.replace(0, np.nan)
+                df['orb_rate'] = orb_hist / trb_hist_adjusted
                         
             # ORB Rate histórico con múltiples ventanas temporales
             for window in [3, 7, 15]:
@@ -668,21 +676,28 @@ class ReboundsFeatureEngineer:
                 if self._register_feature(feature_name, 'rebounding_history'):
                     orb_hist = self._get_historical_series(df, 'offensive_rebounds', window=window, operation='mean')
                     trb_hist = self._get_historical_series(df, 'rebounds', window=window, operation='mean')
-                    df[feature_name] = (orb_hist / (trb_hist + 0.1)).fillna(0.3)
+                    trb_hist_adjusted = trb_hist.replace(0, np.nan)
+                    df[feature_name] = orb_hist / trb_hist_adjusted
             
             # Tendencia de ORB Rate (mejorando/empeorando)
             if self._register_feature('orb_rate_trend', 'rebounding_history'):
-                orb_rate_recent = self._get_historical_series(df, 'offensive_rebounds', window=3, operation='mean') / (self._get_historical_series(df, 'rebounds', window=3, operation='mean') + 0.1)
-                orb_rate_long = self._get_historical_series(df, 'offensive_rebounds', window=10, operation='mean') / (self._get_historical_series(df, 'rebounds', window=10, operation='mean') + 0.1)
-                df['orb_rate_trend'] = (orb_rate_recent - orb_rate_long).fillna(0)
+                orb_recent = self._get_historical_series(df, 'offensive_rebounds', window=3, operation='mean')
+                trb_recent = self._get_historical_series(df, 'rebounds', window=3, operation='mean')
+                orb_long = self._get_historical_series(df, 'offensive_rebounds', window=10, operation='mean')
+                trb_long = self._get_historical_series(df, 'rebounds', window=10, operation='mean')
+                trb_recent_adjusted = trb_recent.replace(0, np.nan)
+                trb_long_adjusted = trb_long.replace(0, np.nan)
+                orb_rate_recent = orb_recent / trb_recent_adjusted
+                orb_rate_long = orb_long / trb_long_adjusted
+                df['orb_rate_trend'] = orb_rate_recent - orb_rate_long
             
             # Volatilidad de ORB Rate (consistencia) - CORREGIDO usando _get_historical_series
             if self._register_feature('orb_rate_volatility', 'rebounding_history'):
                 # Calcular volatilidad usando desviación estándar histórica de offensive_rebounds
                 orb_std = self._get_historical_series(df, 'offensive_rebounds', window=7, operation='std')
-                trb_std = self._get_historical_series(df, 'rebounds', window=7, operation='std') 
-                # Volatilidad relativa del rate de rebotes ofensivos
-                df['orb_rate_volatility'] = (orb_std / (trb_std + 0.1)).fillna(0.1)
+                trb_std = self._get_historical_series(df, 'rebounds', window=7, operation='std')
+                trb_std_adjusted = trb_std.replace(0, np.nan)
+                df['orb_rate_volatility'] = orb_std / trb_std_adjusted
             
             # 4. ORB Rate vs posición (contexto físico)
             if 'Height_Inches' in df.columns and self._register_feature('orb_rate_vs_height', 'rebounding_history'):
@@ -690,43 +705,34 @@ class ReboundsFeatureEngineer:
                 height_percentile = df['Height_Inches'].rank(pct=True)
                 # Asegurar que orb_rate existe antes de usarlo
                 if 'orb_rate' in df.columns:
-                    df['orb_rate_vs_height'] = df['orb_rate'] * (1 - height_percentile * 0.3)  # Ajuste por altura
-                else:
-                    df['orb_rate_vs_height'] = 0.3 * (1 - height_percentile * 0.3)  # Valor por defecto
+                    df['orb_rate_vs_height'] = df['orb_rate'] * (1 - height_percentile * 0.3)
             
             # 5. ORB Rate en contexto de equipo - OPTIMIZADO usando teams_df
             if self._register_feature('orb_rate_team_context', 'rebounding_history'):
-                if self.teams_df is not None and 'Team' in df.columns:
+                if self.teams_df is not None and 'Team' in df.columns and 'orb_rate' in df.columns:
                     try:
                         # Usar team_offensive_rebounds del dataset de equipos directamente
                         if 'team_offensive_rebounds' in self.teams_df.columns and 'total_rebounds' in self.teams_df.columns:
                             team_orb_rate = self.teams_df.groupby('Team').apply(
-                                lambda x: (x['team_offensive_rebounds'] / (x['total_rebounds'] + 0.1)).mean()
+                                lambda x: (x['team_offensive_rebounds'] / x['total_rebounds'].replace(0, np.nan)).mean()
                             ).to_dict()
-                            team_context = df['Team'].map(team_orb_rate).fillna(0.3)
-                            df['orb_rate_team_context'] = df['orb_rate'] / (team_context + 0.01)
+                            team_context = df['Team'].map(team_orb_rate)
+                            team_context_adjusted = team_context.replace(0, np.nan)
+                            df['orb_rate_team_context'] = df['orb_rate'] / team_context_adjusted
                         else:
-                            df['orb_rate_team_context'] = df['orb_rate'] / 0.31  # Valor promedio fijo
+                            df['orb_rate_team_context'] = pd.Series(np.nan, index=df.index)
                     except Exception as e:
                         logger.warning(f"Error en orb_rate_team_context optimizado: {e}")
-                        # Usar valor por defecto si orb_rate no existe
-                        if 'orb_rate' in df.columns:
-                            df['orb_rate_team_context'] = df['orb_rate'] / 0.31
-                        else:
-                            df['orb_rate_team_context'] = 0.3 / 0.31
-                else:
-                    # Usar valor por defecto si orb_rate no existe
-                    if 'orb_rate' in df.columns:
-                        df['orb_rate_team_context'] = df['orb_rate'] / 0.31
-                    else:
-                        df['orb_rate_team_context'] = 0.3 / 0.31
+                        df['orb_rate_team_context'] = pd.Series(np.nan, index=df.index)
             
             # 6. ORB Efficiency Score (combinando rate y volumen)
             if self._register_feature('orb_efficiency_score', 'rebounding_history'):
                 orb_volume = self._get_historical_series(df, 'offensive_rebounds', window=5, operation='mean')
-                orb_rate_hist = self._get_historical_series(df, 'offensive_rebounds', window=5, operation='mean') / (self._get_historical_series(df, 'rebounds', window=5, operation='mean') + 0.1)
-                # Score que combina volumen y eficiencia
-                df['orb_efficiency_score'] = (orb_volume * 0.6 + orb_rate_hist * 10 * 0.4).fillna(1.0)
+                orb_hist = self._get_historical_series(df, 'offensive_rebounds', window=5, operation='mean')
+                trb_hist = self._get_historical_series(df, 'rebounds', window=5, operation='mean')
+                trb_hist_adjusted = trb_hist.replace(0, np.nan)
+                orb_rate_hist = orb_hist / trb_hist_adjusted
+                df['orb_efficiency_score'] = orb_volume * 0.6 + orb_rate_hist * 10 * 0.4
     
     def _create_game_situation_features(self, df: pd.DataFrame) -> None:
         """
@@ -745,15 +751,16 @@ class ReboundsFeatureEngineer:
                     try:
                         if 'points' in self.teams_df.columns:
                             team_avg_pts = self.teams_df.groupby('Team')['points'].mean().to_dict()
-                            team_baseline = df['Team'].map(team_avg_pts).fillna(110.0)  # Promedio NBA
-                            df['scoring_role'] = (player_pts_hist / (team_baseline / 5.0)).fillna(0.2)  # /5 para promedio por jugador
+                            team_baseline = df['Team'].map(team_avg_pts)
+                            team_baseline_adjusted = (team_baseline / 5.0).replace(0, np.nan)
+                            df['scoring_role'] = player_pts_hist / team_baseline_adjusted
                         else:
-                            df['scoring_role'] = (player_pts_hist / 22.0).fillna(0.2)  # 110/5 = 22 pts promedio por jugador
+                            df['scoring_role'] = pd.Series(np.nan, index=df.index)
                     except Exception as e:
                         logger.warning(f"Error en scoring_role optimizado: {e}")
-                        df['scoring_role'] = (player_pts_hist / 22.0).fillna(0.2)
+                        df['scoring_role'] = pd.Series(np.nan, index=df.index)
                 else:
-                    df['scoring_role'] = (player_pts_hist / 22.0).fillna(0.2)
+                    df['scoring_role'] = pd.Series(np.nan, index=df.index)
         
         # 2. Physical Dominance × Interior Play (Físico × Posición)
         if 'physical_dominance_index' in df.columns and 'interior_play_index' in df.columns:
@@ -768,24 +775,29 @@ class ReboundsFeatureEngineer:
         # 5. Composite Rebounding Score (Score maestro)
         if all(col in df.columns for col in ['orb_rate', 'trb_avg_5g', 'physical_dominance_index']):
             if self._register_feature('composite_rebounding_score', 'game_situation'):
+                # Normalizar trb_avg_5g dinámicamente
+                trb_avg_mean = df['trb_avg_5g'].mean()
+                trb_avg_normalized = df['trb_avg_5g'] / trb_avg_mean if trb_avg_mean > 0 else pd.Series(np.nan, index=df.index)
                 # Score ponderado basado en importancia de features
                 df['composite_rebounding_score'] = (
                     df['orb_rate'] * 0.278 +  # Peso basado en importancia del modelo
-                    (df['trb_avg_5g'] / 15) * 0.190 +  # Normalizado
+                    trb_avg_normalized * 0.190 +
                     df['physical_dominance_index'] * 0.100
-                ).fillna(0.5)
+                )
 
         # 7. Performance Momentum (Momentum de rendimiento)
         if 'trb_trend' in df.columns and 'minutes_trend' in df.columns:
             if self._register_feature('performance_momentum', 'game_situation'):
                 # Combinar tendencias de TRB y minutos
-                df['performance_momentum'] = (df['trb_trend'] * 0.7 + df['minutes_trend'] * 0.3).fillna(0)
+                df['performance_momentum'] = df['trb_trend'] * 0.7 + df['minutes_trend'] * 0.3
         
         # 8. Matchup Advantage (Ventaja de emparejamiento)
         if all(col in df.columns for col in ['physical_dominance_index', 'opp_reb_strength_real']):
             if self._register_feature('matchup_advantage', 'game_situation'):
-                # Ventaja física vs fortaleza reboteadora del oponente
-                df['matchup_advantage'] = df['physical_dominance_index'] - (df['opp_reb_strength_real'] / 50)  # Normalizado
+                # Normalizar opp_reb_strength dinámicamente
+                opp_reb_mean = df['opp_reb_strength_real'].mean()
+                opp_reb_normalized = df['opp_reb_strength_real'] / opp_reb_mean if opp_reb_mean > 0 else pd.Series(np.nan, index=df.index)
+                df['matchup_advantage'] = df['physical_dominance_index'] - opp_reb_normalized
 
     def _create_opponent_context_features(self, df: pd.DataFrame) -> None:
         """
@@ -801,16 +813,18 @@ class ReboundsFeatureEngineer:
                     # Usar possessions del dataset para calcular pace real
                     if 'possessions' in self.teams_df.columns:
                         team_pace = self.teams_df.groupby('Team')['possessions'].mean().to_dict()
-                        df['opp_pace_real'] = df['Opp'].map(team_pace).fillna(100.0)  # Pace promedio NBA
-                    else:
-                        # Fallback: usar field_goals_att como indicador de pace
+                        df['opp_pace_real'] = df['Opp'].map(team_pace)
+                    elif 'field_goals_att' in self.teams_df.columns:
+                        # Usar field_goals_att como indicador de pace
                         team_pace = self.teams_df.groupby('Team')['field_goals_att'].mean().to_dict()
-                        df['opp_pace_real'] = df['Opp'].map(team_pace).fillna(85.0)  # FGA promedio
+                        df['opp_pace_real'] = df['Opp'].map(team_pace)
+                    else:
+                        df['opp_pace_real'] = pd.Series(np.nan, index=df.index)
                 except Exception as e:
                     logger.warning(f"Error calculando opp_pace_real: {e}")
-                    df['opp_pace_real'] = 100.0
+                    df['opp_pace_real'] = pd.Series(np.nan, index=df.index)
             else:
-                df['opp_pace_real'] = 100.0
+                df['opp_pace_real'] = pd.Series(np.nan, index=df.index)
         
         # 2. OPP_REB_STRENGTH_REAL - Fortaleza reboteadora real del oponente
         if self._register_feature('opp_reb_strength_real', 'opponent_context'):
@@ -819,20 +833,22 @@ class ReboundsFeatureEngineer:
                     # Usar total_rebounds o rebounds del dataset de equipos
                     if 'total_rebounds' in self.teams_df.columns:
                         team_reb_strength = self.teams_df.groupby('Team')['total_rebounds'].mean().to_dict()
+                        df['opp_reb_strength_real'] = df['Opp'].map(team_reb_strength)
                     elif 'defensive_rebounds' in self.teams_df.columns and 'offensive_rebounds' in self.teams_df.columns:
                         team_reb_strength = self.teams_df.groupby('Team').apply(
                             lambda x: (x['defensive_rebounds'] + x['offensive_rebounds']).mean()
                         ).to_dict()
-                    else:
-                        # Fallback usando team_rebounds
+                        df['opp_reb_strength_real'] = df['Opp'].map(team_reb_strength)
+                    elif 'team_rebounds' in self.teams_df.columns:
                         team_reb_strength = self.teams_df.groupby('Team')['team_rebounds'].mean().to_dict()
-                    
-                    df['opp_reb_strength_real'] = df['Opp'].map(team_reb_strength).fillna(45.0)  # Rebotes promedio
+                        df['opp_reb_strength_real'] = df['Opp'].map(team_reb_strength)
+                    else:
+                        df['opp_reb_strength_real'] = pd.Series(np.nan, index=df.index)
                 except Exception as e:
                     logger.warning(f"Error calculando opp_reb_strength_real: {e}")
-                    df['opp_reb_strength_real'] = 45.0
+                    df['opp_reb_strength_real'] = pd.Series(np.nan, index=df.index)
             else:
-                df['opp_reb_strength_real'] = 45.0
+                df['opp_reb_strength_real'] = pd.Series(np.nan, index=df.index)
         
         # 3. OPP_DEFENSIVE_RATING_REAL - Rating defensivo real del oponente
         if self._register_feature('opp_defensive_rating_real', 'opponent_context'):
@@ -841,16 +857,18 @@ class ReboundsFeatureEngineer:
                     # Usar defensive_rating directamente del dataset
                     if 'defensive_rating' in self.teams_df.columns:
                         team_def_rating = self.teams_df.groupby('Team')['defensive_rating'].mean().to_dict()
-                        df['opp_defensive_rating_real'] = df['Opp'].map(team_def_rating).fillna(110.0)
-                    else:
-                        # Fallback: calcular usando points_against
+                        df['opp_defensive_rating_real'] = df['Opp'].map(team_def_rating)
+                    elif 'points_against' in self.teams_df.columns:
+                        # Usar points_against
                         team_def_rating = self.teams_df.groupby('Team')['points_against'].mean().to_dict()
-                        df['opp_defensive_rating_real'] = df['Opp'].map(team_def_rating).fillna(110.0)
+                        df['opp_defensive_rating_real'] = df['Opp'].map(team_def_rating)
+                    else:
+                        df['opp_defensive_rating_real'] = pd.Series(np.nan, index=df.index)
                 except Exception as e:
                     logger.warning(f"Error calculando opp_defensive_rating_real: {e}")
-                    df['opp_defensive_rating_real'] = 110.0
+                    df['opp_defensive_rating_real'] = pd.Series(np.nan, index=df.index)
             else:
-                df['opp_defensive_rating_real'] = 110.0
+                df['opp_defensive_rating_real'] = pd.Series(np.nan, index=df.index)
         
         # 4. OPP_OFFENSIVE_REBOUNDS_ALLOWED - Rebotes ofensivos permitidos por el oponente
         if self._register_feature('opp_offensive_rebounds_allowed', 'opponent_context'):
@@ -858,16 +876,15 @@ class ReboundsFeatureEngineer:
                 try:
                     # Rebotes ofensivos permitidos = oportunidades para rebotes defensivos
                     if 'team_offensive_rebounds' in self.teams_df.columns:
-                        # Calcular rebotes ofensivos permitidos por el oponente
                         opp_orb_allowed = self.teams_df.groupby('Team')['team_offensive_rebounds'].mean().to_dict()
-                        df['opp_offensive_rebounds_allowed'] = df['Opp'].map(opp_orb_allowed).fillna(10.0)
+                        df['opp_offensive_rebounds_allowed'] = df['Opp'].map(opp_orb_allowed)
                     else:
-                        df['opp_offensive_rebounds_allowed'] = 10.0
+                        df['opp_offensive_rebounds_allowed'] = pd.Series(np.nan, index=df.index)
                 except Exception as e:
                     logger.warning(f"Error calculando opp_offensive_rebounds_allowed: {e}")
-                    df['opp_offensive_rebounds_allowed'] = 10.0
+                    df['opp_offensive_rebounds_allowed'] = pd.Series(np.nan, index=df.index)
             else:
-                df['opp_offensive_rebounds_allowed'] = 10.0
+                df['opp_offensive_rebounds_allowed'] = pd.Series(np.nan, index=df.index)
         
         # 5. OPP_TURNOVERS_REAL - Pérdidas reales del oponente (más pérdidas = más oportunidades)
         if self._register_feature('opp_turnovers_real', 'opponent_context'):
@@ -875,17 +892,17 @@ class ReboundsFeatureEngineer:
                 try:
                     if 'total_turnovers' in self.teams_df.columns:
                         team_turnovers = self.teams_df.groupby('Team')['total_turnovers'].mean().to_dict()
+                        df['opp_turnovers_real'] = df['Opp'].map(team_turnovers)
                     elif 'team_turnovers' in self.teams_df.columns:
                         team_turnovers = self.teams_df.groupby('Team')['team_turnovers'].mean().to_dict()
+                        df['opp_turnovers_real'] = df['Opp'].map(team_turnovers)
                     else:
-                        team_turnovers = {}
-                    
-                    df['opp_turnovers_real'] = df['Opp'].map(team_turnovers).fillna(14.0)  # Turnovers promedio
+                        df['opp_turnovers_real'] = pd.Series(np.nan, index=df.index)
                 except Exception as e:
                     logger.warning(f"Error calculando opp_turnovers_real: {e}")
-                    df['opp_turnovers_real'] = 14.0
+                    df['opp_turnovers_real'] = pd.Series(np.nan, index=df.index)
             else:
-                df['opp_turnovers_real'] = 14.0
+                df['opp_turnovers_real'] = pd.Series(np.nan, index=df.index)
         
         # 6. OPP_FIELD_GOAL_PCT_REAL - Porcentaje de tiros del oponente (peor % = más rebotes)
         if self._register_feature('opp_field_goal_pct_real', 'opponent_context'):
@@ -893,14 +910,14 @@ class ReboundsFeatureEngineer:
                 try:
                     if 'field_goals_pct' in self.teams_df.columns:
                         team_fg_pct = self.teams_df.groupby('Team')['field_goals_pct'].mean().to_dict()
-                        df['opp_field_goal_pct_real'] = df['Opp'].map(team_fg_pct).fillna(45.0)  # FG% promedio
+                        df['opp_field_goal_pct_real'] = df['Opp'].map(team_fg_pct)
                     else:
-                        df['opp_field_goal_pct_real'] = 45.0
+                        df['opp_field_goal_pct_real'] = pd.Series(np.nan, index=df.index)
                 except Exception as e:
                     logger.warning(f"Error calculando opp_field_goal_pct_real: {e}")
-                    df['opp_field_goal_pct_real'] = 45.0
+                    df['opp_field_goal_pct_real'] = pd.Series(np.nan, index=df.index)
             else:
-                df['opp_field_goal_pct_real'] = 45.0
+                df['opp_field_goal_pct_real'] = pd.Series(np.nan, index=df.index)
         
         # 7. OPP_THREE_POINT_ATTEMPTS_REAL - Intentos de triples del oponente (más intentos = más rebotes largos)
         if self._register_feature('opp_three_point_attempts_real', 'opponent_context'):
@@ -908,14 +925,14 @@ class ReboundsFeatureEngineer:
                 try:
                     if 'three_points_att' in self.teams_df.columns:
                         team_3pa = self.teams_df.groupby('Team')['three_points_att'].mean().to_dict()
-                        df['opp_three_point_attempts_real'] = df['Opp'].map(team_3pa).fillna(35.0)  # 3PA promedio
+                        df['opp_three_point_attempts_real'] = df['Opp'].map(team_3pa)
                     else:
-                        df['opp_three_point_attempts_real'] = 35.0
+                        df['opp_three_point_attempts_real'] = pd.Series(np.nan, index=df.index)
                 except Exception as e:
                     logger.warning(f"Error calculando opp_three_point_attempts_real: {e}")
-                    df['opp_three_point_attempts_real'] = 35.0
+                    df['opp_three_point_attempts_real'] = pd.Series(np.nan, index=df.index)
             else:
-                df['opp_three_point_attempts_real'] = 35.0
+                df['opp_three_point_attempts_real'] = pd.Series(np.nan, index=df.index)
         
         # 8. OPP_FAST_BREAK_TENDENCY - Tendencia de juego rápido del oponente
         if self._register_feature('opp_fast_break_tendency', 'opponent_context'):
@@ -923,49 +940,60 @@ class ReboundsFeatureEngineer:
                 try:
                     if 'fast_break_pts' in self.teams_df.columns:
                         team_fastbreak = self.teams_df.groupby('Team')['fast_break_pts'].mean().to_dict()
-                        df['opp_fast_break_tendency'] = df['Opp'].map(team_fastbreak).fillna(12.0)  # Fast break promedio
+                        df['opp_fast_break_tendency'] = df['Opp'].map(team_fastbreak)
                     else:
-                        df['opp_fast_break_tendency'] = 12.0
+                        df['opp_fast_break_tendency'] = pd.Series(np.nan, index=df.index)
                 except Exception as e:
                     logger.warning(f"Error calculando opp_fast_break_tendency: {e}")
-                    df['opp_fast_break_tendency'] = 12.0
+                    df['opp_fast_break_tendency'] = pd.Series(np.nan, index=df.index)
             else:
-                df['opp_fast_break_tendency'] = 12.0
+                df['opp_fast_break_tendency'] = pd.Series(np.nan, index=df.index)
         
         # 9. FEATURES COMBINADAS AVANZADAS
         
         # 9.1 Oportunidades de rebote basadas en shooting del oponente
         if self._register_feature('opp_rebounding_opportunities', 'opponent_context'):
             # Más intentos de tiro + peor % = más oportunidades de rebote
-            attempts_factor = df.get('opp_three_point_attempts_real', 35.0) / 35.0  # Normalizado
-            miss_factor = (50.0 - df.get('opp_field_goal_pct_real', 45.0)) / 10.0  # Más misses = más oportunidades
+            attempts_factor = df.get('opp_three_point_attempts_real', pd.Series(np.nan, index=df.index))
+            miss_factor = df.get('opp_field_goal_pct_real', pd.Series(np.nan, index=df.index))
             # Asegurar que ambos sean Series antes de operar
             if not isinstance(attempts_factor, pd.Series):
                 attempts_factor = pd.Series(attempts_factor, index=df.index)
             if not isinstance(miss_factor, pd.Series):
                 miss_factor = pd.Series(miss_factor, index=df.index)
-            df['opp_rebounding_opportunities'] = (attempts_factor * miss_factor).fillna(1.0)
+            # Normalización dinámica
+            attempts_mean = attempts_factor.mean()
+            attempts_norm = attempts_factor / attempts_mean if attempts_mean > 0 else pd.Series(np.nan, index=df.index)
+            miss_norm = (50.0 - miss_factor) / 10.0  # Más misses = más oportunidades
+            df['opp_rebounding_opportunities'] = attempts_norm * miss_norm
         
         # 9.2 Índice de ritmo vs control del oponente
         if self._register_feature('opp_pace_control_index', 'opponent_context'):
-            pace_factor = df.get('opp_pace_real', 100.0) / 100.0  # Normalizado al pace promedio
-            turnover_factor = df.get('opp_turnovers_real', 14.0) / 14.0  # Más turnovers = menos control
+            pace_factor = df.get('opp_pace_real', pd.Series(np.nan, index=df.index))
+            turnover_factor = df.get('opp_turnovers_real', pd.Series(np.nan, index=df.index))
             # Asegurar que ambos sean Series antes de operar
             if not isinstance(pace_factor, pd.Series):
                 pace_factor = pd.Series(pace_factor, index=df.index)
             if not isinstance(turnover_factor, pd.Series):
                 turnover_factor = pd.Series(turnover_factor, index=df.index)
-            df['opp_pace_control_index'] = (pace_factor / (turnover_factor + 0.1)).fillna(1.0)
+            # Normalización dinámica
+            pace_mean = pace_factor.mean()
+            turnover_mean = turnover_factor.mean()
+            pace_norm = pace_factor / pace_mean if pace_mean > 0 else pd.Series(np.nan, index=df.index)
+            turnover_norm_adjusted = (turnover_factor / turnover_mean if turnover_mean > 0 else pd.Series(np.nan, index=df.index)).replace(0, np.nan)
+            df['opp_pace_control_index'] = pace_norm / turnover_norm_adjusted
         
         # 9.3 Ventaja defensiva vs oponente
         if self._register_feature('defensive_advantage_vs_opp', 'opponent_context'):
             # Combinar rating defensivo y rebotes permitidos
             if 'opp_defensive_rating_real' in df.columns and 'opp_offensive_rebounds_allowed' in df.columns:
-                def_rating_norm = (120.0 - df['opp_defensive_rating_real']) / 10.0  # Mejor rating = más ventaja
-                reb_allowed_norm = df['opp_offensive_rebounds_allowed'] / 10.0  # Más rebotes permitidos = más oportunidades
-                df['defensive_advantage_vs_opp'] = (def_rating_norm + reb_allowed_norm).fillna(1.0)
+                def_rating_mean = df['opp_defensive_rating_real'].mean()
+                reb_allowed_mean = df['opp_offensive_rebounds_allowed'].mean()
+                def_rating_norm = (def_rating_mean - df['opp_defensive_rating_real']) / 10.0 if def_rating_mean > 0 else pd.Series(np.nan, index=df.index)  # Mejor rating = más ventaja
+                reb_allowed_norm = df['opp_offensive_rebounds_allowed'] / reb_allowed_mean if reb_allowed_mean > 0 else pd.Series(np.nan, index=df.index)  # Más rebotes permitidos = más oportunidades
+                df['defensive_advantage_vs_opp'] = def_rating_norm + reb_allowed_norm
             else:
-                df['defensive_advantage_vs_opp'] = 1.0
+                df['defensive_advantage_vs_opp'] = pd.Series(np.nan, index=df.index)
         
         # 10. CARACTERÍSTICAS HISTÓRICAS AVANZADAS CON GET_HISTORICAL_SERIES
         
@@ -980,55 +1008,95 @@ class ReboundsFeatureEngineer:
                     
                     # Comparar con tendencia general
                     general_trb_trend = self._get_historical_series(df, 'rebounds', window=10, operation='mean')
-                    df['trb_vs_opp_trend'] = (opp_trb_history - general_trb_trend).fillna(0.0)
+                    df['trb_vs_opp_trend'] = opp_trb_history - general_trb_trend
                 except Exception as e:
                     logger.warning(f"Error calculando trb_vs_opp_trend: {e}")
-                    df['trb_vs_opp_trend'] = 0.0
+                    df['trb_vs_opp_trend'] = pd.Series(np.nan, index=df.index)
             else:
-                df['trb_vs_opp_trend'] = 0.0
+                df['trb_vs_opp_trend'] = pd.Series(np.nan, index=df.index)
         
         # 10.4 Consistencia reboteadora vs diferentes estilos de oponente
         if self._register_feature('trb_consistency_vs_styles', 'opponent_context'):
-            if 'rebounds' in df.columns:
+            if 'rebounds' in df.columns and 'opp_three_point_attempts_real' in df.columns:
                 try:
                     # Calcular variabilidad de rebotes según estilo del oponente
                     # Equipos de triple (>36 3PA) vs equipos interiores (<32 3PA)
-                    three_heavy_teams = df.get('opp_three_point_attempts_real', 35.0) > 36.0
-                    interior_teams = df.get('opp_three_point_attempts_real', 35.0) < 32.0
+                    opp_3pa = df['opp_three_point_attempts_real']
                     
-                    # Desviación estándar de rebotes vs cada estilo
-                    trb_std_vs_3pt = self._get_historical_series(df[three_heavy_teams], 'rebounds', window=8, operation='std') if three_heavy_teams.any() else pd.Series(2.0, index=df.index)
-                    trb_std_vs_interior = self._get_historical_series(df[interior_teams], 'rebounds', window=8, operation='std') if interior_teams.any() else pd.Series(2.0, index=df.index)
-                    
-                    # Menor desviación = mayor consistencia
-                    consistency_score = 5.0 - ((trb_std_vs_3pt + trb_std_vs_interior) / 2.0)
-                    df['trb_consistency_vs_styles'] = consistency_score.fillna(3.0)
+                    # Verificar que tenemos datos válidos
+                    if opp_3pa.notna().sum() > 0:
+                        three_heavy_teams = opp_3pa > 36.0
+                        interior_teams = opp_3pa < 32.0
+                        
+                        # Solo calcular si tenemos suficientes muestras de cada tipo (al menos 10)
+                        if three_heavy_teams.sum() >= 10 and interior_teams.sum() >= 10:
+                            # Desviación estándar de rebotes vs cada estilo
+                            trb_std_vs_3pt = self._get_historical_series(df[three_heavy_teams], 'rebounds', window=8, operation='std')
+                            trb_std_vs_interior = self._get_historical_series(df[interior_teams], 'rebounds', window=8, operation='std')
+                            
+                            # Alinear índices con df original
+                            trb_std_vs_3pt = trb_std_vs_3pt.reindex(df.index)
+                            trb_std_vs_interior = trb_std_vs_interior.reindex(df.index)
+                            
+                            # Menor desviación = mayor consistencia
+                            avg_std = (trb_std_vs_3pt + trb_std_vs_interior) / 2.0
+                            std_mean = avg_std.mean()
+                            if std_mean > 0:
+                                df['trb_consistency_vs_styles'] = std_mean - avg_std
+                            else:
+                                df['trb_consistency_vs_styles'] = pd.Series(np.nan, index=df.index)
+                        else:
+                            logger.debug(f"Insuficientes muestras para trb_consistency_vs_styles: 3PT={three_heavy_teams.sum()}, Interior={interior_teams.sum()}")
+                            df['trb_consistency_vs_styles'] = pd.Series(np.nan, index=df.index)
+                    else:
+                        logger.debug("No hay datos de opp_three_point_attempts_real para trb_consistency_vs_styles")
+                        df['trb_consistency_vs_styles'] = pd.Series(np.nan, index=df.index)
                 except Exception as e:
                     logger.warning(f"Error calculando trb_consistency_vs_styles: {e}")
-                    df['trb_consistency_vs_styles'] = 3.0
+                    df['trb_consistency_vs_styles'] = pd.Series(np.nan, index=df.index)
             else:
-                df['trb_consistency_vs_styles'] = 3.0
+                df['trb_consistency_vs_styles'] = pd.Series(np.nan, index=df.index)
         
         # 10.5 Factor de dominio de rebotes en partidos importantes
         if self._register_feature('trb_clutch_matchup_factor', 'opponent_context'):
-            if 'rebounds' in df.columns and 'is_home' in df.columns:
+            if 'rebounds' in df.columns and 'is_home' in df.columns and 'opp_defensive_rating_real' in df.columns:
                 try:
                     # Combinar múltiples factores de presión: casa, oponente fuerte, etc.
-                    strong_opponents = df.get('opp_defensive_rating_real', 110.0) < 108.0  # Top defenses
-                    home_games = df.get('is_home', 0) == 1
+                    opp_def_rating = df['opp_defensive_rating_real']
+                    is_home = df['is_home']
                     
-                    # TRB en situaciones de presión
-                    pressure_games = strong_opponents | home_games
-                    trb_under_pressure = self._get_historical_series(df[pressure_games], 'rebounds', window=8, operation='mean') if pressure_games.any() else pd.Series(0, index=df.index)
-                    trb_normal = self._get_historical_series(df[~pressure_games], 'rebounds', window=8, operation='mean') if (~pressure_games).any() else pd.Series(0, index=df.index)
-                    
-                    # Factor de clutch (>1 = mejor bajo presión)
-                    df['trb_clutch_matchup_factor'] = (trb_under_pressure / (trb_normal + 0.1)).fillna(1.0)
+                    # Verificar que tenemos datos válidos
+                    if opp_def_rating.notna().sum() > 0 and is_home.notna().sum() > 0:
+                        opp_def_mean = opp_def_rating.mean()
+                        strong_opponents = opp_def_rating < opp_def_mean  # Mejor que promedio
+                        home_games = is_home == 1
+                        
+                        # TRB en situaciones de presión
+                        pressure_games = strong_opponents | home_games
+                        
+                        # Solo calcular si tenemos suficientes muestras de cada tipo (al menos 10)
+                        if pressure_games.sum() >= 10 and (~pressure_games).sum() >= 10:
+                            trb_under_pressure = self._get_historical_series(df[pressure_games], 'rebounds', window=8, operation='mean')
+                            trb_normal = self._get_historical_series(df[~pressure_games], 'rebounds', window=8, operation='mean')
+                            
+                            # Alinear índices con df original
+                            trb_under_pressure = trb_under_pressure.reindex(df.index)
+                            trb_normal = trb_normal.reindex(df.index)
+                            
+                            # Factor de clutch (>1 = mejor bajo presión)
+                            trb_normal_adjusted = trb_normal.replace(0, np.nan)
+                            df['trb_clutch_matchup_factor'] = trb_under_pressure / trb_normal_adjusted
+                        else:
+                            logger.debug(f"Insuficientes muestras para trb_clutch_matchup_factor: Presión={pressure_games.sum()}, Normal={(~pressure_games).sum()}")
+                            df['trb_clutch_matchup_factor'] = pd.Series(np.nan, index=df.index)
+                    else:
+                        logger.debug("Datos insuficientes de opp_defensive_rating_real o is_home para trb_clutch_matchup_factor")
+                        df['trb_clutch_matchup_factor'] = pd.Series(np.nan, index=df.index)
                 except Exception as e:
                     logger.warning(f"Error calculando trb_clutch_matchup_factor: {e}")
-                    df['trb_clutch_matchup_factor'] = 1.0
+                    df['trb_clutch_matchup_factor'] = pd.Series(np.nan, index=df.index)
             else:
-                df['trb_clutch_matchup_factor'] = 1.0
+                df['trb_clutch_matchup_factor'] = pd.Series(np.nan, index=df.index)
 
     def _create_ensemble_critical_features(self, df: pd.DataFrame) -> None:
         """
@@ -1039,32 +1107,36 @@ class ReboundsFeatureEngineer:
         if self._register_feature('explosion_potential', 'ensemble_critical'):
             trb_max_5g = self._get_historical_series(df, 'rebounds', window=5, operation='max')
             trb_avg_5g = self._get_historical_series(df, 'rebounds', window=5, operation='mean')
-            df['explosion_potential'] = (trb_max_5g - trb_avg_5g).fillna(0.5)  # 0.5 como neutral
+            df['explosion_potential'] = trb_max_5g - trb_avg_5g
         
         # HIGH_VOLUME_EFFICIENCY - Eficiencia en alto volumen (adaptado para rebotes)
         if self._register_feature('high_volume_efficiency', 'ensemble_critical'):
             if 'minutes' in df.columns:
                 mp_avg_5g = self._get_historical_series(df, 'minutes', window=5, operation='mean')
                 trb_avg_5g = self._get_historical_series(df, 'rebounds', window=5, operation='mean')
-                df['high_volume_efficiency'] = ((trb_avg_5g / (mp_avg_5g + 1)) * (mp_avg_5g > 25).astype(int)).fillna(0)
+                mp_avg_adjusted = mp_avg_5g.replace(0, np.nan)
+                high_volume_mask = (mp_avg_5g > 25).astype(int)
+                df['high_volume_efficiency'] = (trb_avg_5g / mp_avg_adjusted) * high_volume_mask
             else:
                 trb_avg_5g = self._get_historical_series(df, 'rebounds', window=5, operation='mean')
-                df['high_volume_efficiency'] = trb_avg_5g.fillna(0)
+                df['high_volume_efficiency'] = trb_avg_5g
         
         # PTS_PER_MINUTE_5G - Puntos por minuto (requerido por ensemble aunque no sea relevante para rebotes)
         if self._register_feature('pts_per_minute_5g', 'ensemble_critical'):
             if 'points' in df.columns and 'minutes' in df.columns:
                 pts_avg_5g = self._get_historical_series(df, 'points', window=5, operation='mean')
                 mp_avg_5g = self._get_historical_series(df, 'minutes', window=5, operation='mean')
-                df['pts_per_minute_5g'] = (pts_avg_5g / (mp_avg_5g + 1)).fillna(0)
+                mp_avg_adjusted = mp_avg_5g.replace(0, np.nan)
+                df['pts_per_minute_5g'] = pts_avg_5g / mp_avg_adjusted
             else:
                 # Si no hay PTS, usar TRB como proxy
                 if 'minutes' in df.columns:
                     trb_avg_5g = self._get_historical_series(df, 'rebounds', window=5, operation='mean')
                     mp_avg_5g = self._get_historical_series(df, 'minutes', window=5, operation='mean')
-                    df['pts_per_minute_5g'] = (trb_avg_5g / (mp_avg_5g + 1)).fillna(0)
+                    mp_avg_adjusted = mp_avg_5g.replace(0, np.nan)
+                    df['pts_per_minute_5g'] = trb_avg_5g / mp_avg_adjusted
                 else:
-                    df['pts_per_minute_5g'] = pd.Series([0] * len(df), index=df.index)
+                    df['pts_per_minute_5g'] = pd.Series(np.nan, index=df.index)
     
     def _add_advanced_predictive_features(self, df: pd.DataFrame):
         """
@@ -1074,29 +1146,30 @@ class ReboundsFeatureEngineer:
         
         # 1. FEATURES DE MOMENTUM COMPUESTO
         if self._register_feature('orb_rate_momentum_weighted', 'advanced_momentum'):
-            orb_rate_trend = df['orb_rate_trend'] if 'orb_rate_trend' in df.columns else pd.Series(0, index=df.index)
-            orb_rate_volatility = df['orb_rate_volatility'] if 'orb_rate_volatility' in df.columns else pd.Series(0, index=df.index)
-            orb_rate_hist_15g = df['orb_rate_hist_15g'] if 'orb_rate_hist_15g' in df.columns else pd.Series(0, index=df.index)
-            df['orb_rate_momentum_weighted'] = (orb_rate_trend * orb_rate_volatility * orb_rate_hist_15g).fillna(0)
+            orb_rate_trend = df['orb_rate_trend'] if 'orb_rate_trend' in df.columns else pd.Series(np.nan, index=df.index)
+            orb_rate_volatility = df['orb_rate_volatility'] if 'orb_rate_volatility' in df.columns else pd.Series(np.nan, index=df.index)
+            orb_rate_hist_15g = df['orb_rate_hist_15g'] if 'orb_rate_hist_15g' in df.columns else pd.Series(np.nan, index=df.index)
+            df['orb_rate_momentum_weighted'] = orb_rate_trend * orb_rate_volatility * orb_rate_hist_15g
         
         if self._register_feature('physical_momentum_context', 'advanced_momentum'):
-            physical_dominance_momentum = df['physical_dominance_momentum'] if 'physical_dominance_momentum' in df.columns else pd.Series(0, index=df.index)
-            physical_interior_interaction = df['physical_interior_interaction'] if 'physical_interior_interaction' in df.columns else pd.Series(0, index=df.index)
-            interior_physical_synergy = df['interior_physical_synergy'] if 'interior_physical_synergy' in df.columns else pd.Series(0, index=df.index)
-            df['physical_momentum_context'] = (physical_dominance_momentum * physical_interior_interaction * interior_physical_synergy).fillna(0)
+            physical_dominance_momentum = df['physical_dominance_momentum'] if 'physical_dominance_momentum' in df.columns else pd.Series(np.nan, index=df.index)
+            physical_interior_interaction = df['physical_interior_interaction'] if 'physical_interior_interaction' in df.columns else pd.Series(np.nan, index=df.index)
+            interior_physical_synergy = df['interior_physical_synergy'] if 'interior_physical_synergy' in df.columns else pd.Series(np.nan, index=df.index)
+            df['physical_momentum_context'] = physical_dominance_momentum * physical_interior_interaction * interior_physical_synergy
         
         # 2. FEATURES DE EFICIENCIA ADAPTATIVA
         if self._register_feature('role_adjusted_efficiency', 'adaptive_efficiency'):
-            composite_rebounding_score = df['composite_rebounding_score'] if 'composite_rebounding_score' in df.columns else pd.Series(0, index=df.index)
-            scoring_role = df['scoring_role'] if 'scoring_role' in df.columns else pd.Series(0, index=df.index)
-            minutes_load_factor = df['minutes_load_factor'] if 'minutes_load_factor' in df.columns else pd.Series(0, index=df.index)
-            df['role_adjusted_efficiency'] = ((composite_rebounding_score * scoring_role) / (minutes_load_factor + 0.01)).fillna(0)
+            composite_rebounding_score = df['composite_rebounding_score'] if 'composite_rebounding_score' in df.columns else pd.Series(np.nan, index=df.index)
+            scoring_role = df['scoring_role'] if 'scoring_role' in df.columns else pd.Series(np.nan, index=df.index)
+            minutes_load_factor = df['minutes_load_factor'] if 'minutes_load_factor' in df.columns else pd.Series(np.nan, index=df.index)
+            minutes_load_factor_adjusted = minutes_load_factor.replace(0, np.nan)
+            df['role_adjusted_efficiency'] = (composite_rebounding_score * scoring_role) / minutes_load_factor_adjusted
 
         # 5. FEATURES DE PREDICCIÓN TEMPORAL
         if self._register_feature('explosion_prediction_score', 'temporal_prediction'):
-            explosion_potential = df.get('explosion_potential', pd.Series(0, index=df.index))
-            trb_acceleration = df.get('trb_acceleration', pd.Series(0, index=df.index))
-            performance_momentum = df.get('performance_momentum', pd.Series(0, index=df.index))
+            explosion_potential = df.get('explosion_potential', pd.Series(np.nan, index=df.index))
+            trb_acceleration = df.get('trb_acceleration', pd.Series(np.nan, index=df.index))
+            performance_momentum = df.get('performance_momentum', pd.Series(np.nan, index=df.index))
             # Asegurar que todos sean Series antes de operar
             if not isinstance(explosion_potential, pd.Series):
                 explosion_potential = pd.Series(explosion_potential, index=df.index)
@@ -1104,13 +1177,13 @@ class ReboundsFeatureEngineer:
                 trb_acceleration = pd.Series(trb_acceleration, index=df.index)
             if not isinstance(performance_momentum, pd.Series):
                 performance_momentum = pd.Series(performance_momentum, index=df.index)
-            df['explosion_prediction_score'] = (explosion_potential * trb_acceleration * performance_momentum).fillna(0)
+            df['explosion_prediction_score'] = explosion_potential * trb_acceleration * performance_momentum
         
         if self._register_feature('sustainability_index', 'temporal_prediction'):
-            trb_trend = df.get('trb_trend', pd.Series(0, index=df.index))
-            orb_rate_trend = df.get('orb_rate_trend', pd.Series(0, index=df.index))
-            minutes_trend = df.get('minutes_trend', pd.Series(0, index=df.index))
-            orb_rate_volatility = df.get('orb_rate_volatility', pd.Series(0, index=df.index))
+            trb_trend = df.get('trb_trend', pd.Series(np.nan, index=df.index))
+            orb_rate_trend = df.get('orb_rate_trend', pd.Series(np.nan, index=df.index))
+            minutes_trend = df.get('minutes_trend', pd.Series(np.nan, index=df.index))
+            orb_rate_volatility = df.get('orb_rate_volatility', pd.Series(np.nan, index=df.index))
             
             # Asegurar que todos sean Series
             if not isinstance(trb_trend, pd.Series):
@@ -1122,15 +1195,15 @@ class ReboundsFeatureEngineer:
             if not isinstance(orb_rate_volatility, pd.Series):
                 orb_rate_volatility = pd.Series(orb_rate_volatility, index=df.index)
             
-            sustainability_index = ((trb_trend * orb_rate_trend * minutes_trend) / (orb_rate_volatility + 0.01)).fillna(0)
-            df['sustainability_index'] = sustainability_index
+            orb_rate_volatility_adjusted = orb_rate_volatility.replace(0, np.nan)
+            df['sustainability_index'] = (trb_trend * orb_rate_trend * minutes_trend) / orb_rate_volatility_adjusted
         
         # 6. FEATURES DE META-ANÁLISIS
         if self._register_feature('impact_efficiency_ratio', 'meta_analysis'):
-            composite_rebounding_score = df.get('composite_rebounding_score', pd.Series(0, index=df.index))
-            physical_dominance_index = df.get('physical_dominance_index', pd.Series(0, index=df.index))
-            minutes_load_factor = df.get('minutes_load_factor', pd.Series(0, index=df.index))
-            player_fga_5g = df.get('player_fga_5g', pd.Series(0, index=df.index))
+            composite_rebounding_score = df.get('composite_rebounding_score', pd.Series(np.nan, index=df.index))
+            physical_dominance_index = df.get('physical_dominance_index', pd.Series(np.nan, index=df.index))
+            minutes_load_factor = df.get('minutes_load_factor', pd.Series(np.nan, index=df.index))
+            player_fga_5g = df.get('player_fga_5g', pd.Series(np.nan, index=df.index))
             
             # Asegurar que todos sean Series
             if not isinstance(composite_rebounding_score, pd.Series):
@@ -1142,13 +1215,13 @@ class ReboundsFeatureEngineer:
             if not isinstance(player_fga_5g, pd.Series):
                 player_fga_5g = pd.Series(player_fga_5g, index=df.index)
             
-            impact_efficiency_ratio = ((composite_rebounding_score + physical_dominance_index) / (minutes_load_factor + player_fga_5g + 0.01)).fillna(0)
-            df['impact_efficiency_ratio'] = impact_efficiency_ratio
+            denominator = (minutes_load_factor + player_fga_5g).replace(0, np.nan)
+            df['impact_efficiency_ratio'] = (composite_rebounding_score + physical_dominance_index) / denominator
         
         if self._register_feature('value_added_index', 'meta_analysis'):
-            orb_rate_team_context = df.get('orb_rate_team_context', pd.Series(0, index=df.index))
-            interior_play_index = df.get('interior_play_index', pd.Series(0, index=df.index))
-            orb_rate_vs_height = df.get('orb_rate_vs_height', pd.Series(0, index=df.index))
+            orb_rate_team_context = df.get('orb_rate_team_context', pd.Series(np.nan, index=df.index))
+            interior_play_index = df.get('interior_play_index', pd.Series(np.nan, index=df.index))
+            orb_rate_vs_height = df.get('orb_rate_vs_height', pd.Series(np.nan, index=df.index))
             
             # Asegurar que todos sean Series
             if not isinstance(orb_rate_team_context, pd.Series):
@@ -1158,8 +1231,7 @@ class ReboundsFeatureEngineer:
             if not isinstance(orb_rate_vs_height, pd.Series):
                 orb_rate_vs_height = pd.Series(orb_rate_vs_height, index=df.index)
             
-            value_added_index = (orb_rate_team_context * interior_play_index * orb_rate_vs_height).fillna(0)
-            df['value_added_index'] = value_added_index
+            df['value_added_index'] = orb_rate_team_context * interior_play_index * orb_rate_vs_height
         
     def _create_elite_rebounders_features(self, df: pd.DataFrame) -> None:
         """
@@ -1172,11 +1244,13 @@ class ReboundsFeatureEngineer:
             if 'rebounds' in df.columns:
                 # Calcular promedio histórico de rebotes por jugador
                 player_trb_avg = df.groupby('player')['rebounds'].expanding().mean().shift(1)
-                player_trb_avg = player_trb_avg.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
+                player_trb_avg = player_trb_avg.reset_index(level=0, drop=True).reindex(df.index)
                 
-                # Definir tiers basados en análisis de errores
+                # Definir tiers basados en análisis de errores - usando percentiles dinámicos
                 def categorize_elite_tier(avg_trb):
-                    if avg_trb >= 12.0:  # Elite nivel Jokić, Gobert, Giannis
+                    if pd.isna(avg_trb):
+                        return np.nan
+                    elif avg_trb >= 12.0:  # Elite nivel Jokić, Gobert, Giannis
                         return 4.0  # TIER EXCEPCIONAL
                     elif avg_trb >= 10.0:  # Elite nivel medio
                         return 3.0  # TIER ELITE
@@ -1187,28 +1261,28 @@ class ReboundsFeatureEngineer:
                     else:
                         return 0.0  # TIER BAJO
                 
-                df['elite_rebounder_tier'] = player_trb_avg.apply(categorize_elite_tier).fillna(1.0)
-            else:
-                df['elite_rebounder_tier'] = 1.0
+                df['elite_rebounder_tier'] = player_trb_avg.apply(categorize_elite_tier)
                 
         # 3. ULTRA PHYSICAL DOMINANCE - CALCULAR PRIMERO
         if self._register_feature('ultra_physical_dominance', 'elite_rebounding'):
             if all(col in df.columns for col in ['Height_Inches', 'Weight', 'physical_dominance_index']):
-                # Combinar altura, peso y dominancia física para ultra dominancia
-                height_factor = (df['Height_Inches'] - 70) / 15  # Normalizado por altura
-                weight_factor = (df['Weight'] - 200) / 50  # Normalizado por peso
-                physical_dominance = df.get('physical_dominance_index', 0.5)
+                # Normalización dinámica por media y std
+                height_mean = df['Height_Inches'].mean()
+                height_std = df['Height_Inches'].std()
+                weight_mean = df['Weight'].mean()
+                weight_std = df['Weight'].std()
+                
+                height_factor = (df['Height_Inches'] - height_mean) / height_std if height_std > 0 else pd.Series(0, index=df.index)
+                weight_factor = (df['Weight'] - weight_mean) / weight_std if weight_std > 0 else pd.Series(0, index=df.index)
+                physical_dominance = df.get('physical_dominance_index', pd.Series(np.nan, index=df.index))
                 
                 # Ultra dominancia = combinación de factores físicos extremos
-                ultra_physical = (height_factor * 0.4 + weight_factor * 0.3 + physical_dominance * 0.3).clip(0, 2.0)
-                df['ultra_physical_dominance'] = ultra_physical.fillna(0.5)
-            else:
-                # Fallback usando solo altura si no hay otros datos
-                if 'Height_Inches' in df.columns:
-                    height_factor = (df['Height_Inches'] - 70) / 15
-                    df['ultra_physical_dominance'] = height_factor.clip(0, 2.0).fillna(0.5)
-                else:
-                    df['ultra_physical_dominance'] = 0.5
+                df['ultra_physical_dominance'] = (height_factor * 0.4 + weight_factor * 0.3 + physical_dominance * 0.3).clip(0, 2.0)
+            elif 'Height_Inches' in df.columns:
+                height_mean = df['Height_Inches'].mean()
+                height_std = df['Height_Inches'].std()
+                height_factor = (df['Height_Inches'] - height_mean) / height_std if height_std > 0 else pd.Series(0, index=df.index)
+                df['ultra_physical_dominance'] = height_factor.clip(0, 2.0)
         
         # 4. FACTOR DE AMPLIFICACIÓN PARA ELITE
         if self._register_feature('elite_amplification_factor', 'elite_rebounding'):
@@ -1228,16 +1302,14 @@ class ReboundsFeatureEngineer:
                 mp_hist = self._get_historical_series(df, 'minutes', window=10, operation='mean')
                 
                 # Bloqueos por minuto histórico (indica presencia interior)
-                blk_rate = blk_hist / (mp_hist + 1) * 36  # Por 36 minutos
+                mp_hist_adjusted = mp_hist.replace(0, np.nan)
+                blk_rate = (blk_hist / mp_hist_adjusted) * 36  # Por 36 minutos
                 
                 # Faltas defensivas históricas (indica agresividad interior)
-                pf_rate = pf_hist / (mp_hist + 1) * 36
+                pf_rate = (pf_hist / mp_hist_adjusted) * 36
                 
                 # Presencia interior compuesta HISTÓRICA
-                interior_presence = (blk_rate * 4.0 + pf_rate * 0.8)  # Incrementar peso de bloqueos
-                df['interior_presence_advanced'] = interior_presence.fillna(1.0)
-            else:
-                df['interior_presence_advanced'] = 1.0
+                df['interior_presence_advanced'] = blk_rate * 4.0 + pf_rate * 0.8
                 
         # 6. EFICIENCIA REBOTEADORA CONTEXTUAL ELITE (CORREGIDA - SIN DATA LEAKAGE)
         if self._register_feature('elite_rebounding_efficiency', 'elite_rebounding'):
@@ -1246,15 +1318,16 @@ class ReboundsFeatureEngineer:
                 trb_hist = self._get_historical_series(df, 'rebounds', window=5, operation='mean')
                 mp_hist = self._get_historical_series(df, 'minutes', window=5, operation='mean')
                 
-                # TRB por minuto histórico ajustado por expectativa física
-                trb_per_minute = trb_hist / (mp_hist + 1) * 36
-                height_expectation = (df['Height_Inches'] - 70) * 0.8  # Expectativa base
+                # TRB por minuto histórico
+                mp_hist_adjusted = mp_hist.replace(0, np.nan)
+                trb_per_minute = (trb_hist / mp_hist_adjusted) * 36
                 
-                # Eficiencia = rendimiento histórico vs expectativa física
-                efficiency = trb_per_minute / (height_expectation + 3)
-                df['elite_rebounding_efficiency'] = efficiency.fillna(1.0)
-            else:
-                df['elite_rebounding_efficiency'] = 1.0
+                # Expectativa dinámica basada en groupby por altura
+                height_expectation = df.groupby('Height_Inches')['rebounds'].transform(lambda x: x.expanding().mean().shift(1))
+                height_expectation_adjusted = height_expectation.replace(0, np.nan)
+                
+                # Eficiencia = rendimiento histórico vs expectativa real
+                df['elite_rebounding_efficiency'] = trb_per_minute / height_expectation_adjusted
                 
         # 7. MOMENTUM REBOTEADOR ELITE
         if self._register_feature('elite_rebounding_momentum', 'elite_rebounding'):
@@ -1264,11 +1337,8 @@ class ReboundsFeatureEngineer:
                 trb_season = self._get_historical_series(df, 'rebounds', window=15, operation='mean')
                 
                 # Calcular momentum con amplificación para elite
-                elite_tier = df.get('elite_rebounder_tier', 1.0)
-                momentum = (trb_recent - trb_season) * (1 + elite_tier * 0.5)
-                df['elite_rebounding_momentum'] = momentum.fillna(0)
-            else:
-                df['elite_rebounding_momentum'] = 0
+                elite_tier = df.get('elite_rebounder_tier', pd.Series(np.nan, index=df.index))
+                df['elite_rebounding_momentum'] = (trb_recent - trb_season) * (1 + elite_tier * 0.5)
                 
         # 9. FEATURES ESPECÍFICAS PARA JUGADORES PROBLEMÁTICOS
         if self._register_feature('problematic_player_boost', 'elite_rebounding'):
@@ -1329,7 +1399,10 @@ class ReboundsFeatureEngineer:
             minus_avg = self._get_historical_series(df, 'minus', self.windows['medium'], 'mean')
             reb_avg = self._get_historical_series(df, 'rebounds', self.windows['medium'], 'mean')
             
-            df['rebounding_impact_score'] = (plus_avg - minus_avg) * (reb_avg / 10.0)
+            # Normalizar dinámicamente
+            reb_mean = reb_avg.mean()
+            reb_normalized = reb_avg / reb_mean if reb_mean > 0 else pd.Series(np.nan, index=df.index)
+            df['rebounding_impact_score'] = (plus_avg - minus_avg) * reb_normalized
             self._register_feature('rebounding_impact_score', 'rebounding_history')
         
         # 5. DEFENSIVE RATING VS REBOUNDING
@@ -1338,7 +1411,9 @@ class ReboundsFeatureEngineer:
             reb_avg = self._get_historical_series(df, 'rebounds', self.windows['medium'], 'mean')
             
             # Menor defensive rating = mejor defensa, más oportunidades de rebote
-            df['defensive_rebounding_synergy'] = reb_avg / (def_rating_avg / 100.0)
+            def_rating_normalized = def_rating_avg / 100.0
+            def_rating_normalized_adjusted = def_rating_normalized.replace(0, np.nan)
+            df['defensive_rebounding_synergy'] = reb_avg / def_rating_normalized_adjusted
             self._register_feature('defensive_rebounding_synergy', 'rebounding_history')
         
         # 6. TRUE SHOOTING VS REBOUNDING (opponent misses)
@@ -1381,7 +1456,7 @@ class ReboundsFeatureEngineer:
                     q_data = quarter_averages[quarter_averages['quarter'] == quarter]
                     if len(q_data) > 0:
                         q_mapping = dict(zip(q_data['player'], q_data['rebounds']))
-                        df[f'q{quarter}_rebounding_avg'] = df['player'].map(q_mapping).fillna(2.5)
+                        df[f'q{quarter}_rebounding_avg'] = df['player'].map(q_mapping)
                         self._register_feature(f'q{quarter}_rebounding_avg', 'rebounding_history')
             
             # CLUTCH REBOUNDING - SIMPLIFICADO usando promedio Q4
@@ -1390,49 +1465,10 @@ class ReboundsFeatureEngineer:
                 if len(q4_data) > 0:
                     # Usar promedio simple en lugar de rolling complejo
                     q4_avg = q4_data.groupby('player')['rebounds'].mean()
-                    df['clutch_rebounding'] = df['player'].map(q4_avg).fillna(2.5)
+                    df['clutch_rebounding'] = df['player'].map(q4_avg)
                     self._register_feature('clutch_rebounding', 'rebounding_history')
         
         except Exception as e:
             logger.warning(f"Error generando features de cuartos para TRB: {e}")
 
-    def _clean_infinite_values(self, df: pd.DataFrame) -> None:
-        """
-        Limpia valores infinitos, NaN y valores extremos en el DataFrame
-        """
-        logger.debug("Limpiando valores infinitos y extremos...")
-        
-        # Columnas numéricas
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
-        
-        for col in numeric_cols:
-            if col in self.protected_features:
-                continue
-                
-            # Reemplazar infinitos
-            df[col] = df[col].replace([np.inf, -np.inf], np.nan)
-            
-            # Reemplazar NaN con valores seguros
-            if df[col].dtype in ['float64', 'float32']:
-                df[col] = df[col].fillna(0.0)
-            else:
-                df[col] = df[col].fillna(0)
-            
-            # Limitar valores extremos SOLO si hay variación en los datos
-            if df[col].dtype in ['float64', 'float32'] and len(df[col].unique()) > 1:
-                # Usar percentiles para límites realistas
-                q99 = df[col].quantile(0.99)
-                q01 = df[col].quantile(0.01)
-                
-                if pd.notna(q99) and pd.notna(q01) and q99 != q01:
-                    # Límites realistas sin multiplicar por 3
-                    range_val = q99 - q01
-                    upper_limit = q99 + range_val * 0.5  # Expandir 50% arriba
-                    lower_limit = q01 - range_val * 0.5  # Expandir 50% abajo
-                    
-                    # Solo aplicar si los límites son sensatos
-                    if upper_limit > q99 and lower_limit < q01:
-                        df[col] = df[col].clip(lower=lower_limit, upper=upper_limit)
-        
-        logger.debug(f"Limpieza completada para {len(numeric_cols)} columnas numéricas")
     

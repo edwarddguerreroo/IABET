@@ -115,15 +115,11 @@ class HalfTimeFeatureEngineer:
         return result
     
     def _convert_mp_to_numeric(self, df: pd.DataFrame) -> None:
-        """Convierte columna MP (minutos jugados) de formato MM:SS a decimal o usa 'minutes' si existe"""
-        # Priorizar 'minutes' del nuevo dataset si existe
-        if 'minutes' in df.columns:
-            if 'MP' not in df.columns:
-                df['MP'] = df['minutes']
-            else:
-                # Si ambos existen, usar 'minutes' que es más confiable
-                df['MP'] = df['minutes']
-        elif 'MP' in df.columns and df['MP'].dtype == 'object':
+        """Asegura que la columna 'minutes' esté disponible y en formato decimal"""
+        if 'minutes' not in df.columns:
+            logger.warning("No se encontró columna 'minutes'")
+            df['minutes'] = 0
+        elif df['minutes'].dtype == 'object':
             def parse_time(time_str):
                 try:
                     if pd.isna(time_str) or time_str == '':
@@ -135,7 +131,7 @@ class HalfTimeFeatureEngineer:
                 except:
                     return 0.0
             
-            df['MP'] = df['MP'].apply(parse_time)
+            df['minutes'] = df['minutes'].apply(parse_time)
 
     def generate_all_features(self, df: pd.DataFrame) -> List[str]:
         """Pipeline completo de generacion de caracteristicas para modelo de team points."""

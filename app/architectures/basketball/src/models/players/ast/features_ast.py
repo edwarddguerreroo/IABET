@@ -69,13 +69,14 @@ class AssistsFeatureEngineer:
         """
         Cálculo rolling optimizado con validación robusta de índices
         SIEMPRE usa shift(1) para prevenir data leakage (futuros juegos)
+        SIN FALLBACKS: Retorna NaN cuando no hay datos suficientes
         """
         # Validar entrada
         if not isinstance(df, pd.DataFrame):
             raise ValueError("df debe ser un DataFrame")
         if column not in df.columns:
-            logger.warning(f" Columna '{column}' no encontrada, retornando ceros")
-            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+            logger.warning(f"⚠️ Columna '{column}' no encontrada, retornando NaN")
+            return pd.Series(np.nan, index=df.index, name=f"{column}_{window}_{operation}")
         
         # Validar que df esté ordenado cronológicamente
         if 'Date' in df.columns and not df['Date'].is_monotonic_increasing:
@@ -84,15 +85,17 @@ class AssistsFeatureEngineer:
         # Calcular rolling con validación de índices
         try:
             if operation == 'mean':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1)
             elif operation == 'std':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=2).std().shift(1).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=2).std().shift(1)
             elif operation == 'max':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).max().shift(1).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).max().shift(1)
+            elif operation == 'min':
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).min().shift(1)
             elif operation == 'sum':
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).sum().shift(1).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).sum().shift(1)
             else:
-                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1).fillna(0)
+                result = df.groupby('player')[column].rolling(window=window, min_periods=1).mean().shift(1)
             
             # Validar que result tenga MultiIndex
             if isinstance(result.index, pd.MultiIndex):
@@ -102,18 +105,18 @@ class AssistsFeatureEngineer:
             # Validar alineación de índices antes de reindex
             if not result.index.equals(df.index):
                 logger.debug(f"Reindexando {column}_{window}_{operation} para alinear índices")
-                result = result.reindex(df.index, fill_value=0)
+                result = result.reindex(df.index)
             
             # Validar resultado final
             if len(result) != len(df):
-                logger.error(f" Error: Longitud de resultado ({len(result)}) != DataFrame ({len(df)})")
-                return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+                logger.error(f"❌ Error: Longitud de resultado ({len(result)}) != DataFrame ({len(df)})")
+                return pd.Series(np.nan, index=df.index, name=f"{column}_{window}_{operation}")
             
             return result
             
         except Exception as e:
-            logger.error(f" Error calculando {column}_{window}_{operation}: {e}")
-            return pd.Series(0, index=df.index, name=f"{column}_{window}_{operation}")
+            logger.error(f"❌ Error calculando {column}_{window}_{operation}: {e}")
+            return pd.Series(np.nan, index=df.index, name=f"{column}_{window}_{operation}")
             
     def _convert_mp_to_numeric(self, df: pd.DataFrame) -> None:
         """Convierte columna minutes (minutos jugados) de formato MM:SS a decimal o usa 'minutes' si existe"""
@@ -245,6 +248,7 @@ class AssistsFeatureEngineer:
     def _create_evolutionary_features_group(self, df: pd.DataFrame) -> None:
         """
         Feature evolutivas dominantes para predicción de asistencias (AST)
+        SIN FALLBACKS - Solo datos reales
         """
         
         # Calcular series históricas una sola vez
@@ -255,24 +259,28 @@ class AssistsFeatureEngineer:
         
         if 'minutes' in df.columns:
             mp_avg = self._get_historical_series(df, 'minutes', window=5, operation='mean')
-            mp_expected = mp_avg.fillna(20.0)
-            minutes_pressure = (mp_expected / 30.0).clip(0.5, 2.0)
+            # Normalización dinámica sin hardcode
+            mp_expected = mp_avg
+            # División segura sin clip hardcoded
+            minutes_pressure = mp_expected / mp_expected.mean()
         else:
-            minutes_pressure = 1.0
+            minutes_pressure = pd.Series(np.nan, index=df.index)
         
         # 1. EVOLUTIONARY SELECTION PRESSURE (28.88%)
         if self._register_feature('evolutionary_selection_pressure', 'evolutionary_features'):
             evolutionary_pressure = ast_avg * minutes_pressure
-            df['evolutionary_selection_pressure'] = evolutionary_pressure.fillna(3.0)
+            df['evolutionary_selection_pressure'] = evolutionary_pressure
         
         # 2. EVOLUTIONARY DOMINANCE INDEX (9.51%)
         if self._register_feature('evolutionary_dominance_index', 'evolutionary_features'):
-            selection_pressure = df.get('evolutionary_selection_pressure', 0)
-            evolutionary_fitness = 1 / (ast_std.fillna(1) + 0.1)
+            selection_pressure = df.get('evolutionary_selection_pressure', pd.Series(np.nan, index=df.index))
+            # División segura sin fallback
+            ast_std_adjusted = ast_std.replace(0, np.nan)
+            evolutionary_fitness = 1 / ast_std_adjusted
             dominance_index = (selection_pressure * 0.7 + evolutionary_fitness * 0.3)
-            df['evolutionary_dominance_index'] = dominance_index.fillna(0.5)
+            df['evolutionary_dominance_index'] = dominance_index
         
-        # 3. PLAYER ADAPTABILITY SCORE (4.53%) - CORREGIDO SIN DATA LEAKAGE
+        # 3. PLAYER ADAPTABILITY SCORE (4.53%) - CORREGIDO SIN DATA LEAKAGE Y SIN FALLBACKS
         if self._register_feature('player_adaptability_score', 'evolutionary_features'):
             if 'Date' in df.columns and 'assists' in df.columns:
                 # Usar datos históricos para calcular adaptabilidad
@@ -289,21 +297,23 @@ class AssistsFeatureEngineer:
                     player_adaptability = player_monthly_var.groupby('player')['assists_shifted'].mean()
                     
                     # Adaptabilidad = 1 / (varianza + 1) - menor varianza = mayor adaptabilidad
-                    adaptability_map = (1 / (player_adaptability.fillna(1) + 1)).to_dict()
-                    df['player_adaptability_score'] = df['player'].map(adaptability_map).fillna(0.5)
+                    # División segura sin fillna
+                    player_adaptability_adjusted = player_adaptability.replace(0, np.nan) + 1.0
+                    adaptability_map = (1 / player_adaptability_adjusted).to_dict()
+                    df['player_adaptability_score'] = df['player'].map(adaptability_map)
                 except Exception as e:
                     logger.warning(f"Error en player adaptability: {e}")
-                    df['player_adaptability_score'] = 0.5
+                    df['player_adaptability_score'] = pd.Series(np.nan, index=df.index)
             else:
-                df['player_adaptability_score'] = 0.5
+                df['player_adaptability_score'] = pd.Series(np.nan, index=df.index)
         
         
-        # 5. EVOLUTIONARY MOMENTUM PREDICTOR (4.02%) - Clipping suave
+        # 5. EVOLUTIONARY MOMENTUM PREDICTOR (4.02%) - Sin clipping hardcoded
         if self._register_feature('evolutionary_momentum_predictor', 'evolutionary_features'):
-            momentum_factor = (ast_recent - ast_season).fillna(0)
-            adaptability = df.get('player_adaptability_score', 0.5)
-            evolutionary_momentum = (momentum_factor * adaptability * 2.0)
-            df['evolutionary_momentum_predictor'] = evolutionary_momentum.fillna(0).clip(-1.5, 1.5)
+            momentum_factor = ast_recent - ast_season
+            adaptability = df.get('player_adaptability_score', pd.Series(np.nan, index=df.index))
+            evolutionary_momentum = momentum_factor * adaptability * 2.0
+            df['evolutionary_momentum_predictor'] = evolutionary_momentum
         
         # 6. GENETIC ALGORITHM PREDICTOR (3.71%)
         if self._register_feature('genetic_algorithm_predictor', 'evolutionary_features'):
@@ -313,16 +323,20 @@ class AssistsFeatureEngineer:
             
             if len(available_features) >= 2:
                 weights = [0.5, 0.3, 0.2]
-                genetic_score = pd.Series([0] * len(df), index=df.index)
+                genetic_score = pd.Series(np.nan, index=df.index)
                 for i, feature in enumerate(available_features[:3]):
-                    genetic_score += df[feature] * weights[i]
-                df['genetic_algorithm_predictor'] = genetic_score.fillna(0)
-        else:
-                df['genetic_algorithm_predictor'] = 0
+                    if i == 0:
+                        genetic_score = df[feature] * weights[i]
+                    else:
+                        genetic_score = genetic_score + df[feature] * weights[i]
+                df['genetic_algorithm_predictor'] = genetic_score
+            else:
+                df['genetic_algorithm_predictor'] = pd.Series(np.nan, index=df.index)
 
     def _create_positioning_features_group(self, df: pd.DataFrame) -> None:
         """
         FEATURES DE POSICIONAMIENTO Y MINUTOS
+        SIN FALLBACKS - Solo datos reales
         """
         
         if 'minutes' in df.columns:
@@ -332,22 +346,25 @@ class AssistsFeatureEngineer:
             # MINUTES BASED AST PREDICTOR (3.54%)
             if self._register_feature('minutes_based_ast_predictor', 'minutes_positioning') and 'assists' in df.columns:
                 ast_hist = self._get_historical_series(df, 'assists', window=5, operation='mean')
-                ast_per_minute = ast_hist / (mp_hist + 1)
-                minutes_predictor = mp_expected.fillna(20.0) * ast_per_minute
-                df['minutes_based_ast_predictor'] = minutes_predictor.fillna(3.0)
+                # División segura sin fallback
+                mp_hist_adjusted = mp_hist.replace(0, np.nan)
+                ast_per_minute = ast_hist / mp_hist_adjusted
+                minutes_predictor = mp_expected * ast_per_minute
+                df['minutes_based_ast_predictor'] = minutes_predictor
             
             # MINUTES EXPECTED (2.95%)
             if self._register_feature('minutes_expected', 'minutes_positioning'):
-                df['minutes_expected'] = mp_expected.fillna(20.0)
+                df['minutes_expected'] = mp_expected
         else:
             if self._register_feature('minutes_based_ast_predictor', 'minutes_positioning'):
-                df['minutes_based_ast_predictor'] = 3.0
+                df['minutes_based_ast_predictor'] = pd.Series(np.nan, index=df.index)
             if self._register_feature('minutes_expected', 'minutes_positioning'):
-                df['minutes_expected'] = 20.0
+                df['minutes_expected'] = pd.Series(np.nan, index=df.index)
 
     def _create_context_efficiency_features_group(self, df: pd.DataFrame) -> None:
         """
         FEATURES DE CONTEXTO Y EFICIENCIA
+        SIN FALLBACKS - Solo datos reales
         """
         # HOME AWAY AST FACTOR (1.86%)
         if self._register_feature('home_away_ast_factor', 'team_context') and 'assists' in df.columns:
@@ -356,7 +373,7 @@ class AssistsFeatureEngineer:
                 for player in df['player'].unique():
                     player_data = df[df['player'] == player].copy()
                     if len(player_data) < 5:
-                        player_home_away_map[player] = 1.0
+                        player_home_away_map[player] = np.nan
                         continue
                     
                     if 'is_home' in player_data.columns:
@@ -366,46 +383,56 @@ class AssistsFeatureEngineer:
                         home_games = player_data[player_data['Away'] != '@']
                         away_games = player_data[player_data['Away'] == '@']
                     else:
-                        player_home_away_map[player] = 1.0
+                        player_home_away_map[player] = np.nan
                         continue
                     
-                    home_ast_avg = home_games['assists'].mean() if len(home_games) > 0 else 3.0
-                    away_ast_avg = away_games['assists'].mean() if len(away_games) > 0 else 3.0
+                    # Sin fallbacks hardcoded
+                    home_ast_avg = home_games['assists'].mean() if len(home_games) > 0 else np.nan
+                    away_ast_avg = away_games['assists'].mean() if len(away_games) > 0 else np.nan
                     
-                    player_home_away_map[player] = home_ast_avg / (away_ast_avg + 0.1)
+                    # División segura
+                    if pd.notna(home_ast_avg) and pd.notna(away_ast_avg) and away_ast_avg > 0:
+                        player_home_away_map[player] = home_ast_avg / away_ast_avg
+                    else:
+                        player_home_away_map[player] = np.nan
                 
-                df['home_away_ast_factor'] = df['player'].map(player_home_away_map).fillna(1.0)
+                df['home_away_ast_factor'] = df['player'].map(player_home_away_map)
             except Exception as e:
                 logger.warning(f"Error en home/away factor: {e}")
-                df['home_away_ast_factor'] = 1.0
+                df['home_away_ast_factor'] = pd.Series(np.nan, index=df.index)
         
         # PLAYER OFFENSIVE LOAD PCT L10 (1.60%) - OPTIMIZADO CON DATASET
         if self._register_feature('player_offensive_load_pct_l10', 'efficiency_metrics'):
             if 'offensive_rating' in df.columns:
                 # USAR DIRECTAMENTE offensive_rating del dataset (más preciso)
                 off_rating_hist = self._get_historical_series(df, 'offensive_rating', window=10, operation='mean')
-                # Normalizar a porcentaje vs league average (~110)
-                load_percentage = (off_rating_hist / 110.0) * 100
-                df['player_offensive_load_pct_l10'] = load_percentage.fillna(100.0)
+                # Normalizar a porcentaje vs promedio dinámico
+                league_avg_rating = off_rating_hist.mean()
+                load_percentage = (off_rating_hist / league_avg_rating) * 100
+                df['player_offensive_load_pct_l10'] = load_percentage
             elif 'points' in df.columns and 'assists' in df.columns:
-                # Fallback al cálculo original si no hay offensive_rating
+                # Cálculo alternativo sin fallback
                 df['offensive_contribution'] = df['points'] + (df['assists'] * 2)
                 offensive_load = self._get_historical_series(df, 'offensive_contribution', window=10, operation='mean')
                 
                 if 'Team' in df.columns and 'Date' in df.columns:
                     team_offensive_total = df.groupby(['Team', 'Date'])['offensive_contribution'].transform('sum')
                     team_avg_load = team_offensive_total.rolling(window=5).mean().shift(1)
-                    load_percentage = (offensive_load / (team_avg_load + 1)) * 100
-                    df['player_offensive_load_pct_l10'] = load_percentage.fillna(20.0)
+                    # División segura
+                    team_avg_load_adjusted = team_avg_load.replace(0, np.nan)
+                    load_percentage = (offensive_load / team_avg_load_adjusted) * 100
+                    df['player_offensive_load_pct_l10'] = load_percentage
                 else:
                     league_avg_load = offensive_load.mean()
-                    df['player_offensive_load_pct_l10'] = ((offensive_load / (league_avg_load + 1)) * 100).fillna(20.0)
+                    league_avg_load_adjusted = league_avg_load if league_avg_load > 0 else np.nan
+                    df['player_offensive_load_pct_l10'] = (offensive_load / league_avg_load_adjusted) * 100
             else:
-                df['player_offensive_load_pct_l10'] = 20.0
+                df['player_offensive_load_pct_l10'] = pd.Series(np.nan, index=df.index)
 
     def _create_assist_range_features(self, df: pd.DataFrame) -> None:
         """
         FEATURES POR RANGOS DE ASISTENCIAS (CRÍTICO máximo 25)
+        SIN FALLBACKS - Solo datos reales
         """
         
         if 'assists' not in df.columns:
@@ -418,19 +445,20 @@ class AssistsFeatureEngineer:
 
         # 5. EXPLOSION POTENTIAL (diferencia max - promedio)
         if self._register_feature('ast_explosion_potential', 'assists_history'):
-            explosion_potential = (ast_max - ast_avg).fillna(0).clip(0, 15)
+            explosion_potential = ast_max - ast_avg
             df['ast_explosion_potential'] = explosion_potential
         
         # 8. EXTREME GAME FREQUENCY (frecuencia de 10+ asistencias)
         if self._register_feature('extreme_ast_game_freq', 'assists_history'):
             # Calcular frecuencia de juegos con 10+ asistencias por jugador
             extreme_game_freq = df.groupby('player')['assists'].apply(lambda x: (x.shift(1) >= 10).rolling(20, min_periods=5).mean())
-            extreme_game_freq = extreme_game_freq.reset_index(level=0, drop=True).reindex(df.index, fill_value=0)
-            df['extreme_ast_game_freq'] = extreme_game_freq.fillna(0).clip(0, 1)
+            extreme_game_freq = extreme_game_freq.reset_index(level=0, drop=True).reindex(df.index)
+            df['extreme_ast_game_freq'] = extreme_game_freq
 
     def _create_basic_historical_features(self, df: pd.DataFrame) -> None:
         """
         FEATURES HISTÓRICAS BÁSICAS
+        SIN FALLBACKS - Solo datos reales
         """
         
         if 'assists' not in df.columns:
@@ -441,12 +469,12 @@ class AssistsFeatureEngineer:
             feature_name = f'ast_avg_{window}g'
             if self._register_feature(feature_name, 'assists_history'):
                 ast_hist = self._get_historical_series(df, 'assists', window=window, operation='mean')
-                df[feature_name] = ast_hist.fillna(3.0)
+                df[feature_name] = ast_hist
         
         # Season average como baseline
         if self._register_feature('ast_season_avg', 'assists_history'):
             ast_season = self._get_historical_series(df, 'assists', window=20, operation='mean')
-            df['ast_season_avg'] = ast_season.fillna(3.0)
+            df['ast_season_avg'] = ast_season
 
         # 12. AST HYBRID PREDICTOR (1.2773% importancia)
         if self._register_feature('ast_hybrid_predictor', 'evolutionary_features'):
@@ -457,38 +485,41 @@ class AssistsFeatureEngineer:
                 hybrid_score = sum(df[f] for f in available) / len(available)
                 df['ast_hybrid_predictor'] = hybrid_score * 1.15  # Factor de amplificación
             else:
-                df['ast_hybrid_predictor'] = 3.0
+                df['ast_hybrid_predictor'] = pd.Series(np.nan, index=df.index)
         
         # 15. POSITION INDEX (1.0833% importancia)
         if self._register_feature('position_index', 'player_context'):
             if 'Pos' in df.columns:
                 # Mapear posiciones a índices de playmaking
                 pos_map = {'PG': 5, 'SG': 3, 'SF': 2, 'PF': 1, 'C': 1}
-                df['position_index'] = df['Pos'].map(pos_map).fillna(2)
-        else:
-                df['position_index'] = 2
+                df['position_index'] = df['Pos'].map(pos_map)
+            else:
+                df['position_index'] = pd.Series(np.nan, index=df.index)
         
         # 16. ADAPTIVE VOLATILITY PREDICTOR (1.0255% importancia)
         if self._register_feature('adaptive_volatility_predictor', 'evolutionary_features'):
             if 'assists' in df.columns:
                 ast_std = self._get_historical_series(df, 'assists', window=7, operation='std')
                 ast_avg = self._get_historical_series(df, 'assists', window=10, operation='mean')
-                # Predictor adaptativo basado en volatilidad
-                volatility_factor = ast_std / (ast_avg + 0.1)
+                # Predictor adaptativo basado en volatilidad - División segura
+                ast_avg_adjusted = ast_avg.replace(0, np.nan)
+                volatility_factor = ast_std / ast_avg_adjusted
                 adaptive_pred = ast_avg * (1 + volatility_factor * 0.3)
-                df['adaptive_volatility_predictor'] = adaptive_pred.fillna(3.0)
-        else:
-                df['adaptive_volatility_predictor'] = 3.0
+                df['adaptive_volatility_predictor'] = adaptive_pred
+            else:
+                df['adaptive_volatility_predictor'] = pd.Series(np.nan, index=df.index)
         
         # 18. EVOLUTIONARY FITNESS (0.9077% importancia)
         if self._register_feature('evolutionary_fitness', 'evolutionary_features'):
             if 'assists' in df.columns:
                 # Fitness evolutivo basado en consistencia y eficiencia
                 ast_consistency = self._get_historical_series(df, 'assists', window=7, operation='std')
-                fitness = 1 / (ast_consistency.fillna(1) + 0.1)
-                df['evolutionary_fitness'] = fitness.clip(0, 10)
+                # División segura sin clip hardcoded
+                ast_consistency_adjusted = ast_consistency.replace(0, np.nan)
+                fitness = 1 / ast_consistency_adjusted
+                df['evolutionary_fitness'] = fitness
             else:
-                df['evolutionary_fitness'] = 1.0
+                df['evolutionary_fitness'] = pd.Series(np.nan, index=df.index)
         
         
         # 21. EVOLUTIONARY MUTATION RATE (0.7845% importancia)
@@ -497,10 +528,10 @@ class AssistsFeatureEngineer:
                 # Tasa de mutación evolutiva = cambios abruptos en rendimiento
                 ast_rolling = self._get_historical_series(df, 'assists', window=5, operation='mean')
                 ast_diff = ast_rolling.diff().abs()
-                mutation_rate = ast_diff.rolling(window=3).mean().fillna(0)
-                df['evolutionary_mutation_rate'] = mutation_rate.clip(0, 5)
+                mutation_rate = ast_diff.rolling(window=3).mean()
+                df['evolutionary_mutation_rate'] = mutation_rate
             else:
-                df['evolutionary_mutation_rate'] = 0.5
+                df['evolutionary_mutation_rate'] = pd.Series(np.nan, index=df.index)
         
         # 22. DYNAMIC RANGE PREDICTOR (0.7775% importancia)
         if self._register_feature('dynamic_range_predictor', 'assists_history'):
@@ -512,9 +543,9 @@ class AssistsFeatureEngineer:
                 
                 # Predictor dinámico = promedio ponderado con sesgo hacia máximo
                 dynamic_pred = (ast_avg_5g * 0.6 + ast_max_5g * 0.3 + ast_min_5g * 0.1)
-                df['dynamic_range_predictor'] = dynamic_pred.fillna(3.0)
+                df['dynamic_range_predictor'] = dynamic_pred
             else:
-                df['dynamic_range_predictor'] = 3.0
+                df['dynamic_range_predictor'] = pd.Series(np.nan, index=df.index)
         
         # 23. ULTRA EFFICIENCY PREDICTOR (0.7696% importancia)
         if self._register_feature('ultra_efficiency_predictor', 'efficiency_metrics'):
@@ -522,13 +553,15 @@ class AssistsFeatureEngineer:
                 # Ultra eficiencia = AST por minuto con ajustes contextuales
                 ast_avg = self._get_historical_series(df, 'assists', window=7, operation='mean')
                 mp_avg = self._get_historical_series(df, 'minutes', window=7, operation='mean')
-                ast_per_min = ast_avg / (mp_avg + 1)
+                # División segura
+                mp_avg_adjusted = mp_avg.replace(0, np.nan)
+                ast_per_min = ast_avg / mp_avg_adjusted
                 
                 # Predictor ultra eficiente proyectado a 36 minutos
                 ultra_pred = ast_per_min * 36
-                df['ultra_efficiency_predictor'] = ultra_pred.fillna(3.0)
+                df['ultra_efficiency_predictor'] = ultra_pred
             else:
-                df['ultra_efficiency_predictor'] = 3.0
+                df['ultra_efficiency_predictor'] = pd.Series(np.nan, index=df.index)
         
 
         # 29. HIGH VOLUME EFFICIENCY (0.6721% importancia)
@@ -540,12 +573,15 @@ class AssistsFeatureEngineer:
                 
                 # Boost para jugadores con muchos minutos y alta eficiencia
                 high_volume = (mp_avg >= 28).astype(int)
-                efficiency = ast_avg / (mp_avg / 36)  # AST per 36 minutes
+                # División segura
+                mp_per_36 = mp_avg / 36
+                mp_per_36_adjusted = mp_per_36.replace(0, np.nan)
+                efficiency = ast_avg / mp_per_36_adjusted  # AST per 36 minutes
                 
                 high_vol_eff = high_volume * efficiency
-                df['high_volume_efficiency'] = high_vol_eff.fillna(0)
+                df['high_volume_efficiency'] = high_vol_eff
             else:
-                df['high_volume_efficiency'] = 0
+                df['high_volume_efficiency'] = pd.Series(np.nan, index=df.index)
         
         # 30. ASSIST MOMENTUM ACCELERATION (NUEVA - basada en assists_turnover_ratio)
         if 'assists_turnover_ratio' in df.columns:
@@ -555,12 +591,13 @@ class AssistsFeatureEngineer:
                 at_ratio_7g = self._get_historical_series(df, 'assists_turnover_ratio', window=7, operation='mean')
                 at_ratio_15g = self._get_historical_series(df, 'assists_turnover_ratio', window=15, operation='mean')
                 
-                # Momentum = tendencia de mejora en A/T ratio
-                momentum = (at_ratio_3g - at_ratio_7g) / (at_ratio_15g + 0.1)
+                # Momentum = tendencia de mejora en A/T ratio - División segura
+                at_ratio_15g_adjusted = at_ratio_15g.replace(0, np.nan)
+                momentum = (at_ratio_3g - at_ratio_7g) / at_ratio_15g_adjusted
                 acceleration = (at_ratio_3g - at_ratio_7g) - (at_ratio_7g - at_ratio_15g)
-                df['assist_momentum_acceleration'] = (momentum + acceleration).fillna(0).clip(-2, 2)
+                df['assist_momentum_acceleration'] = momentum + acceleration
             else:
-                df['assist_momentum_acceleration'] = 0
+                df['assist_momentum_acceleration'] = pd.Series(np.nan, index=df.index)
         
         # 31. EFFICIENCY GAME SCORE IMPACT (NUEVA - basada en efficiency_game_score)
         if 'efficiency_game_score' in df.columns:
@@ -570,11 +607,12 @@ class AssistsFeatureEngineer:
                 game_score_std = self._get_historical_series(df, 'efficiency_game_score', window=10, operation='std')
                 ast_5g = self._get_historical_series(df, 'assists', window=5, operation='mean')
                 
-                # Correlación entre game score y asistencias
-                impact_score = (game_score_5g * ast_5g) / (game_score_std + 1)
-                df['efficiency_game_score_impact'] = impact_score.fillna(0).clip(0, 10)
+                # Correlación entre game score y asistencias - División segura
+                game_score_std_adjusted = game_score_std.replace(0, np.nan) + 1.0
+                impact_score = (game_score_5g * ast_5g) / game_score_std_adjusted
+                df['efficiency_game_score_impact'] = impact_score
             else:
-                df['efficiency_game_score_impact'] = 0
+                df['efficiency_game_score_impact'] = pd.Series(np.nan, index=df.index)
         
         # 32. FOULS DRAWN PLAYMAKING (NUEVA - basada en fouls_drawn)
         if 'fouls_drawn' in df.columns:
@@ -584,11 +622,12 @@ class AssistsFeatureEngineer:
                 ast_5g = self._get_historical_series(df, 'assists', window=5, operation='mean')
                 minutes_5g = self._get_historical_series(df, 'minutes', window=5, operation='mean')
                 
-                # Playmaking por atracción de faltas
-                playmaking_score = (fouls_drawn_5g * ast_5g) / (minutes_5g + 0.1)
-                df['fouls_drawn_playmaking'] = playmaking_score.fillna(0).clip(0, 5)
+                # Playmaking por atracción de faltas - División segura
+                minutes_5g_adjusted = minutes_5g.replace(0, np.nan)
+                playmaking_score = (fouls_drawn_5g * ast_5g) / minutes_5g_adjusted
+                df['fouls_drawn_playmaking'] = playmaking_score
             else:
-                df['fouls_drawn_playmaking'] = 0
+                df['fouls_drawn_playmaking'] = pd.Series(np.nan, index=df.index)
         
         # 33. SECOND CHANCE PLAYMAKING (NUEVA - basada en second_chance_pts)
         if 'second_chance_pts' in df.columns:
@@ -598,12 +637,13 @@ class AssistsFeatureEngineer:
                 sc_att_5g = self._get_historical_series(df, 'second_chance_att', window=5, operation='mean')
                 ast_5g = self._get_historical_series(df, 'assists', window=5, operation='mean')
                 
-                # Eficiencia en second chance + asistencias
-                sc_efficiency = sc_pts_5g / (sc_att_5g + 0.1)
+                # Eficiencia en second chance + asistencias - División segura
+                sc_att_5g_adjusted = sc_att_5g.replace(0, np.nan)
+                sc_efficiency = sc_pts_5g / sc_att_5g_adjusted
                 playmaking_score = sc_efficiency * ast_5g
-                df['second_chance_playmaking'] = playmaking_score.fillna(0).clip(0, 8)
+                df['second_chance_playmaking'] = playmaking_score
             else:
-                df['second_chance_playmaking'] = 0
+                df['second_chance_playmaking'] = pd.Series(np.nan, index=df.index)
         
         # 34. FAST BREAK PLAYMAKING ENHANCED (NUEVA - basada en fast_break_pts)
         if 'fast_break_pts' in df.columns:
@@ -617,9 +657,9 @@ class AssistsFeatureEngineer:
                 # Eficiencia en fast break + asistencias
                 fb_efficiency = fb_pct_5g / 100
                 playmaking_score = (fb_pts_5g * fb_efficiency * ast_5g) / 10
-                df['fast_break_playmaking_enhanced'] = playmaking_score.fillna(0).clip(0, 6)
+                df['fast_break_playmaking_enhanced'] = playmaking_score
             else:
-                df['fast_break_playmaking_enhanced'] = 0
+                df['fast_break_playmaking_enhanced'] = pd.Series(np.nan, index=df.index)
         
         # 35. DEFENSIVE RATING IMPACT (NUEVA - basada en defensive_rating)
         if 'defensive_rating' in df.columns:
@@ -628,11 +668,12 @@ class AssistsFeatureEngineer:
                 def_rating_5g = self._get_historical_series(df, 'defensive_rating', window=5, operation='mean')
                 ast_5g = self._get_historical_series(df, 'assists', window=5, operation='mean')
                 
-                # Jugadores con mejor rating defensivo tienden a ser mejores playmakers
-                impact_score = ast_5g / (def_rating_5g + 50) * 100
-                df['defensive_rating_impact'] = impact_score.fillna(0).clip(0, 5)
+                # Jugadores con mejor rating defensivo tienden a ser mejores playmakers - División segura
+                def_rating_5g_adjusted = (def_rating_5g + 50).replace(0, np.nan)
+                impact_score = ast_5g / def_rating_5g_adjusted * 100
+                df['defensive_rating_impact'] = impact_score
             else:
-                df['defensive_rating_impact'] = 0
+                df['defensive_rating_impact'] = pd.Series(np.nan, index=df.index)
         
         # 36. OFFENSIVE RATING SYNERGY (NUEVA - basada en offensive_rating)
         if 'offensive_rating' in df.columns:
@@ -642,11 +683,12 @@ class AssistsFeatureEngineer:
                 ast_5g = self._get_historical_series(df, 'assists', window=5, operation='mean')
                 minutes_5g = self._get_historical_series(df, 'minutes', window=5, operation='mean')
                 
-                # Sinergia = asistencias por minuto * rating ofensivo
-                synergy = (ast_5g / (minutes_5g + 0.1)) * (off_rating_5g / 100)
-                df['offensive_rating_synergy'] = synergy.fillna(0).clip(0, 3)
+                # Sinergia = asistencias por minuto * rating ofensivo - División segura
+                minutes_5g_adjusted = minutes_5g.replace(0, np.nan)
+                synergy = (ast_5g / minutes_5g_adjusted) * (off_rating_5g / 100)
+                df['offensive_rating_synergy'] = synergy
             else:
-                df['offensive_rating_synergy'] = 0
+                df['offensive_rating_synergy'] = pd.Series(np.nan, index=df.index)
         
         # 37. BLOCKED ATTEMPTS PLAYMAKING (NUEVA - basada en blocked_att)
         if 'blocked_att' in df.columns:
@@ -656,12 +698,13 @@ class AssistsFeatureEngineer:
                 fg_att_5g = self._get_historical_series(df, 'field_goals_att', window=5, operation='mean')
                 ast_5g = self._get_historical_series(df, 'assists', window=5, operation='mean')
                 
-                # Agresividad ofensiva + asistencias
-                aggression = blocked_att_5g / (fg_att_5g + 0.1)
+                # Agresividad ofensiva + asistencias - División segura
+                fg_att_5g_adjusted = fg_att_5g.replace(0, np.nan)
+                aggression = blocked_att_5g / fg_att_5g_adjusted
                 playmaking_score = aggression * ast_5g
-                df['blocked_attempts_playmaking'] = playmaking_score.fillna(0).clip(0, 4)
+                df['blocked_attempts_playmaking'] = playmaking_score
             else:
-                df['blocked_attempts_playmaking'] = 0
+                df['blocked_attempts_playmaking'] = pd.Series(np.nan, index=df.index)
         
         # 38. PLUS MINUS MOMENTUM (NUEVA - basada en plus)
         if 'plus' in df.columns:
@@ -673,9 +716,9 @@ class AssistsFeatureEngineer:
                 
                 # Momentum = (plus - minus) * asistencias
                 momentum = (plus_5g - minus_5g) * ast_5g / 10
-                df['plus_minus_momentum'] = momentum.fillna(0).clip(-2, 2)
+                df['plus_minus_momentum'] = momentum
             else:
-                df['plus_minus_momentum'] = 0
+                df['plus_minus_momentum'] = pd.Series(np.nan, index=df.index)
         
         # 39. ELITE PLAYER SCALING (NUEVA - Corrección crítica)
         if self._register_feature('elite_player_scaling', 'player_tier'):
@@ -714,11 +757,12 @@ class AssistsFeatureEngineer:
                 ast_max_10g = self._get_historical_series(df, 'assists', window=10, operation='max')
                 ast_avg_10g = self._get_historical_series(df, 'assists', window=10, operation='mean')
                 
-                # Potencial explosivo = capacidad de superar promedio significativamente
-                explosive_potential = (ast_max_10g - ast_avg_10g) / (ast_std_10g + 0.1)
-                df['explosive_game_potential'] = explosive_potential.fillna(0).clip(0, 5)
+                # Potencial explosivo = capacidad de superar promedio significativamente - División segura
+                ast_std_10g_adjusted = ast_std_10g.replace(0, np.nan)
+                explosive_potential = (ast_max_10g - ast_avg_10g) / ast_std_10g_adjusted
+                df['explosive_game_potential'] = explosive_potential
             else:
-                df['explosive_game_potential'] = 0
+                df['explosive_game_potential'] = pd.Series(np.nan, index=df.index)
         
         # 41. HIGH VOLUME GAME INDICATOR (NUEVA - Corrección crítica)
         if self._register_feature('high_volume_game_indicator', 'game_context'):
@@ -729,9 +773,9 @@ class AssistsFeatureEngineer:
                 
                 # Alto volumen = muchos minutos + buen promedio de asistencias
                 high_volume = ((minutes_5g >= 30) & (ast_5g >= 5)).astype(int)
-                df['high_volume_game_indicator'] = high_volume.fillna(0)
+                df['high_volume_game_indicator'] = high_volume
             else:
-                df['high_volume_game_indicator'] = 0
+                df['high_volume_game_indicator'] = pd.Series(np.nan, index=df.index)
         
         # 42. STAR PLAYER MOMENTUM (NUEVA - Corrección crítica)
         if self._register_feature('star_player_momentum', 'advanced_playmaking'):
@@ -745,39 +789,46 @@ class AssistsFeatureEngineer:
                 momentum = (ast_3g - ast_7g) + (ast_7g - ast_15g) * 0.5
                 consistency_bonus = (ast_3g >= 6).astype(int) * 0.5
                 
-                df['star_player_momentum'] = (momentum + consistency_bonus).fillna(0).clip(-2, 3)
+                df['star_player_momentum'] = momentum + consistency_bonus
             else:
-                df['star_player_momentum'] = 0
+                df['star_player_momentum'] = pd.Series(np.nan, index=df.index)
         
         # 43. QUARTER-BASED EXPLOSIVE DETECTION (NUEVA - Corrección crítica)
         if self._register_feature('quarter_explosive_detection', 'quarter_analysis'):
             # Detectar juegos explosivos basado en patrones por cuarto
-            # Trae Young: 2.88-3.02 AST por cuarto = 11-12 AST total esperado
             if hasattr(self, 'players_quarters_df') and self.players_quarters_df is not None:
                 try:
                     # Calcular promedio de asistencias por cuarto para cada jugador
                     quarter_stats = self.players_quarters_df.groupby(['player', 'quarter'])['assists'].mean().reset_index()
                     player_quarter_avg = quarter_stats.groupby('player')['assists'].mean().to_dict()
                     
-                    # Factor de explosión basado en promedio por cuarto
-                    explosive_factor = pd.Series([1.0] * len(df), index=df.index)
+                    # Factor de explosión basado en promedio por cuarto - Normalización dinámica
+                    explosive_factor = pd.Series(np.nan, index=df.index)
+                    # Calcular percentiles dinámicos
+                    quarter_avgs = pd.Series(list(player_quarter_avg.values()))
+                    p75 = quarter_avgs.quantile(0.75) if len(quarter_avgs) > 0 else np.nan
+                    p50 = quarter_avgs.quantile(0.50) if len(quarter_avgs) > 0 else np.nan
+                    p25 = quarter_avgs.quantile(0.25) if len(quarter_avgs) > 0 else np.nan
+                    
                     for idx, player in enumerate(df['player']):
                         if player in player_quarter_avg:
                             quarter_avg = player_quarter_avg[player]
-                            # Si promedia 3+ AST por cuarto, es un jugador explosivo
-                            if quarter_avg >= 3.0:
-                                explosive_factor.iloc[idx] = 2.5  # Factor alto para explosivos
-                            elif quarter_avg >= 2.5:
-                                explosive_factor.iloc[idx] = 2.0  # Factor medio
-                            elif quarter_avg >= 2.0:
-                                explosive_factor.iloc[idx] = 1.5  # Factor bajo
+                            # Normalización dinámica basada en percentiles
+                            if pd.notna(p75) and quarter_avg >= p75:
+                                explosive_factor.iloc[idx] = 2.5
+                            elif pd.notna(p50) and quarter_avg >= p50:
+                                explosive_factor.iloc[idx] = 2.0
+                            elif pd.notna(p25) and quarter_avg >= p25:
+                                explosive_factor.iloc[idx] = 1.5
+                            else:
+                                explosive_factor.iloc[idx] = 1.0
                     
                     df['quarter_explosive_detection'] = explosive_factor
                 except Exception as e:
                     logger.warning(f"Error en quarter explosive detection: {e}")
-                    df['quarter_explosive_detection'] = 1.0
+                    df['quarter_explosive_detection'] = pd.Series(np.nan, index=df.index)
             else:
-                df['quarter_explosive_detection'] = 1.0
+                df['quarter_explosive_detection'] = pd.Series(np.nan, index=df.index)
         
         # 44. QUARTER CONSISTENCY PATTERN (NUEVA - Corrección crítica)
         if self._register_feature('quarter_consistency_pattern', 'quarter_analysis'):
@@ -786,15 +837,17 @@ class AssistsFeatureEngineer:
                 try:
                     # Calcular consistencia por cuarto (baja desviación = alta consistencia)
                     quarter_consistency = self.players_quarters_df.groupby('player')['assists'].agg(['mean', 'std']).reset_index()
-                    quarter_consistency['consistency_score'] = quarter_consistency['mean'] / (quarter_consistency['std'] + 0.1)
+                    # División segura
+                    quarter_consistency['std_adjusted'] = quarter_consistency['std'].replace(0, np.nan)
+                    quarter_consistency['consistency_score'] = quarter_consistency['mean'] / quarter_consistency['std_adjusted']
                     
                     consistency_map = dict(zip(quarter_consistency['player'], quarter_consistency['consistency_score']))
-                    df['quarter_consistency_pattern'] = df['player'].map(consistency_map).fillna(1.0)
+                    df['quarter_consistency_pattern'] = df['player'].map(consistency_map)
                 except Exception as e:
                     logger.warning(f"Error en quarter consistency: {e}")
-                    df['quarter_consistency_pattern'] = 1.0
+                    df['quarter_consistency_pattern'] = pd.Series(np.nan, index=df.index)
             else:
-                df['quarter_consistency_pattern'] = 1.0
+                df['quarter_consistency_pattern'] = pd.Series(np.nan, index=df.index)
         
         # 45. QUARTER MOMENTUM ACCELERATION (NUEVA - Corrección crítica)
         if self._register_feature('quarter_momentum_acceleration', 'quarter_analysis'):
@@ -810,42 +863,51 @@ class AssistsFeatureEngineer:
                         q1_q2 = player_data[player_data['quarter'].isin([1, 2])]['assists'].mean()
                         q3_q4 = player_data[player_data['quarter'].isin([3, 4])]['assists'].mean()
                         
-                        # Momentum = mejora en segunda mitad
-                        if pd.notna(q1_q2) and pd.notna(q3_q4):
-                            momentum = (q3_q4 - q1_q2) / (q1_q2 + 0.1)
+                        # Momentum = mejora en segunda mitad - División segura
+                        if pd.notna(q1_q2) and pd.notna(q3_q4) and q1_q2 > 0:
+                            momentum = (q3_q4 - q1_q2) / q1_q2
                         else:
-                            momentum = 0
+                            momentum = np.nan
                         
                         momentum_scores[player] = momentum
                     
-                    df['quarter_momentum_acceleration'] = df['player'].map(momentum_scores).fillna(0)
+                    df['quarter_momentum_acceleration'] = df['player'].map(momentum_scores)
                 except Exception as e:
                     logger.warning(f"Error en quarter momentum: {e}")
-                    df['quarter_momentum_acceleration'] = 0
+                    df['quarter_momentum_acceleration'] = pd.Series(np.nan, index=df.index)
             else:
-                df['quarter_momentum_acceleration'] = 0
+                df['quarter_momentum_acceleration'] = pd.Series(np.nan, index=df.index)
         
         # 46. ELITE QUARTER PERFORMANCE (NUEVA - Corrección crítica)
         if self._register_feature('elite_quarter_performance', 'quarter_analysis'):
             # Rendimiento elite por cuarto
             if hasattr(self, 'players_quarters_df') and self.players_quarters_df is not None:
                 try:
-                    # Identificar jugadores que consistentemente tienen 3+ AST por cuarto
-                    elite_quarter_players = self.players_quarters_df.groupby('player')['assists'].mean()
-                    elite_quarter_players = elite_quarter_players[elite_quarter_players >= 3.0].index.tolist()
+                    # Identificar jugadores elite por percentil dinámico
+                    player_quarter_avg = self.players_quarters_df.groupby('player')['assists'].mean()
+                    p75 = player_quarter_avg.quantile(0.75) if len(player_quarter_avg) > 0 else np.nan
+                    elite_quarter_players = player_quarter_avg[player_quarter_avg >= p75].index.tolist() if pd.notna(p75) else []
                     
-                    # Factor de elite basado en rendimiento por cuarto
-                    elite_factor = pd.Series([1.0] * len(df), index=df.index)
+                    # Factor de elite basado en rendimiento por cuarto - Normalización dinámica
+                    elite_factor = pd.Series(np.nan, index=df.index)
                     for idx, player in enumerate(df['player']):
                         if player in elite_quarter_players:
-                            elite_factor.iloc[idx] = 3.0  # Factor muy alto para elite
+                            # Normalizar por el promedio general
+                            player_avg = player_quarter_avg.get(player, np.nan)
+                            overall_avg = player_quarter_avg.mean()
+                            if pd.notna(player_avg) and pd.notna(overall_avg) and overall_avg > 0:
+                                elite_factor.iloc[idx] = player_avg / overall_avg
+                            else:
+                                elite_factor.iloc[idx] = np.nan
+                        else:
+                            elite_factor.iloc[idx] = 1.0
                     
                     df['elite_quarter_performance'] = elite_factor
                 except Exception as e:
                     logger.warning(f"Error en elite quarter performance: {e}")
-                    df['elite_quarter_performance'] = 1.0
+                    df['elite_quarter_performance'] = pd.Series(np.nan, index=df.index)
             else:
-                df['elite_quarter_performance'] = 1.0
+                df['elite_quarter_performance'] = pd.Series(np.nan, index=df.index)
         
         # 47. QUARTER-BASED GAME PROJECTION (NUEVA - Corrección crítica)
         if self._register_feature('quarter_based_game_projection', 'quarter_analysis'):
@@ -856,12 +918,12 @@ class AssistsFeatureEngineer:
                     quarter_projection = self.players_quarters_df.groupby('player')['assists'].mean() * 4
                     projection_map = quarter_projection.to_dict()
                     
-                    df['quarter_based_game_projection'] = df['player'].map(projection_map).fillna(3.0)
+                    df['quarter_based_game_projection'] = df['player'].map(projection_map)
                 except Exception as e:
                     logger.warning(f"Error en quarter projection: {e}")
-                    df['quarter_based_game_projection'] = 3.0
+                    df['quarter_based_game_projection'] = pd.Series(np.nan, index=df.index)
             else:
-                df['quarter_based_game_projection'] = 3.0
+                df['quarter_based_game_projection'] = pd.Series(np.nan, index=df.index)
 
     def _create_quarter_based_features(self, df: pd.DataFrame) -> None:
         """
@@ -985,6 +1047,7 @@ class AssistsFeatureEngineer:
     def _generate_advanced_dataset_features(self, df: pd.DataFrame) -> None:
         """
         Genera features avanzadas usando las nuevas métricas del dataset
+        SIN FALLBACKS - Solo datos reales
         """        
         # 1. ASSIST-TO-TURNOVER EFFICIENCY (ya calculado en dataset)
         if 'assists_turnover_ratio' in df.columns:
@@ -1001,8 +1064,10 @@ class AssistsFeatureEngineer:
                 # Eficiencia en transiciones - clave para asistencias
                 fb_hist = self._get_historical_series(df, 'fast_break_pts', window=5, operation='mean')
                 fb_att_hist = self._get_historical_series(df, 'fast_break_att', window=5, operation='mean')
-                fb_efficiency = fb_hist / (fb_att_hist + 0.1)
-                df['fast_break_playmaking'] = fb_efficiency.fillna(0.5)
+                # División segura sin fallback
+                fb_att_adjusted = fb_att_hist.replace(0, np.nan)
+                fb_efficiency = fb_hist / fb_att_adjusted
+                df['fast_break_playmaking'] = fb_efficiency
                 
         # 3. SECOND CHANCE CREATION (del dataset)
         if all(col in df.columns for col in ['second_chance_pts', 'offensive_rebounds']):
@@ -1010,8 +1075,10 @@ class AssistsFeatureEngineer:
                 # Capacidad de crear segundas oportunidades
                 sc_pts_hist = self._get_historical_series(df, 'second_chance_pts', window=5, operation='mean')
                 orb_hist = self._get_historical_series(df, 'offensive_rebounds', window=5, operation='mean')
-                creation_rate = sc_pts_hist / (orb_hist + 0.1)
-                df['second_chance_creation'] = creation_rate.fillna(1.0)
+                # División segura sin fallback
+                orb_adjusted = orb_hist.replace(0, np.nan)
+                creation_rate = sc_pts_hist / orb_adjusted
+                df['second_chance_creation'] = creation_rate
                 
         # 6. TRUE SHOOTING SUPPORT (del dataset)
         if 'true_shooting_pct' in df.columns:
@@ -1021,7 +1088,7 @@ class AssistsFeatureEngineer:
                 ast_hist = self._get_historical_series(df, 'assists', window=5, operation='mean')
                 # Jugadores que asisten cuando el equipo tira bien
                 support_score = ts_hist * ast_hist / 100.0
-                df['true_shooting_support'] = support_score.fillna(1.0)
+                df['true_shooting_support'] = support_score
                 
         # 7. EFFICIENCY RATING CORRELATION (del dataset)  
         if all(col in df.columns for col in ['efficiency', 'offensive_rating']):
@@ -1030,7 +1097,7 @@ class AssistsFeatureEngineer:
                 eff_hist = self._get_historical_series(df, 'efficiency', window=5, operation='mean')
                 off_rating_hist = self._get_historical_series(df, 'offensive_rating', window=5, operation='mean')
                 synergy = (eff_hist * off_rating_hist) / 1000.0  # Normalizar
-                df['efficiency_rating_synergy'] = synergy.fillna(10.0)
+                df['efficiency_rating_synergy'] = synergy
                 
         # 8. DEFENSIVE IMPACT ON ASSISTS (del dataset)
         if 'defensive_rating' in df.columns:
@@ -1038,12 +1105,15 @@ class AssistsFeatureEngineer:
                 # Mejor defensa = más posesiones = más oportunidades de asistir
                 def_rating_hist = self._get_historical_series(df, 'defensive_rating', window=5, operation='mean')
                 # Invertir: menor defensive rating = mejor defensa = más asistencias potenciales
-                assist_opportunities = 120.0 / (def_rating_hist + 1.0)  # Normalizar alrededor de 110-120
-                df['defensive_assist_impact'] = assist_opportunities.fillna(1.0)
+                # División segura sin fallback
+                def_rating_adjusted = def_rating_hist.replace(0, np.nan) + 1.0
+                assist_opportunities = 120.0 / def_rating_adjusted
+                df['defensive_assist_impact'] = assist_opportunities
 
     def _create_opponent_context_features(self, df: pd.DataFrame) -> None:
         """
         FEATURES DE OPONENTE Y CONTEXTO
+        SIN FALLBACKS - Solo datos reales
         """
         # 1. REAL OPPONENT DEF RATING (1.3569% importancia) - CORREGIDO
         if self._register_feature('real_opponent_def_rating', 'opponent_context'):
@@ -1052,12 +1122,12 @@ class AssistsFeatureEngineer:
                 try:
                     # Calcular rating defensivo promedio por equipo (menor = mejor defensa)
                     team_def_rating = self.teams_df.groupby('Team')['defensive_rating'].mean().to_dict()
-                    df['real_opponent_def_rating'] = df['Opp'].map(team_def_rating).fillna(105.0)
+                    df['real_opponent_def_rating'] = df['Opp'].map(team_def_rating)
                 except Exception as e:
                     logger.warning(f"Error en real_opponent_def_rating: {e}")
-                    df['real_opponent_def_rating'] = 105.0
+                    df['real_opponent_def_rating'] = pd.Series(np.nan, index=df.index)
             else:
-                df['real_opponent_def_rating'] = 105.0
+                df['real_opponent_def_rating'] = pd.Series(np.nan, index=df.index)
         
         # 2. OPP PTS ALLOWED (0.719% importancia) - CORREGIDO
         if self._register_feature('opp_pts_allowed', 'opponent_context'):
@@ -1066,12 +1136,12 @@ class AssistsFeatureEngineer:
                 try:
                     # Usar points_against del dataset de equipos (puntos permitidos por el equipo)
                     opp_pts_allowed = self.teams_df.groupby('Team')['points_against'].mean().to_dict()
-                    df['opp_pts_allowed'] = df['Opp'].map(opp_pts_allowed).fillna(110.0)
+                    df['opp_pts_allowed'] = df['Opp'].map(opp_pts_allowed)
                 except Exception as e:
                     logger.warning(f"Error en opp_pts_allowed: {e}")
-                    df['opp_pts_allowed'] = 110.0
+                    df['opp_pts_allowed'] = pd.Series(np.nan, index=df.index)
             else:
-                df['opp_pts_allowed'] = 110.0
+                df['opp_pts_allowed'] = pd.Series(np.nan, index=df.index)
         
         # 3. OPPONENT ADAPTATION SCORE (0.744% importancia) - CORREGIDO SIN DATA LEAKAGE
         if self._register_feature('opponent_adaptation_score', 'opponent_context'):
@@ -1090,23 +1160,23 @@ class AssistsFeatureEngineer:
                     for _, row in player_opp_performance.iterrows():
                         player = row['player']
                         opp_avg = row['assists_shifted']
-                        overall_avg = player_overall_avg.get(player, 3.0)
+                        overall_avg = player_overall_avg.get(player, np.nan)
                         
-                        # Adaptation score = ratio vs promedio general histórico
+                        # Adaptation score = ratio vs promedio general histórico - División segura
                         if pd.notna(opp_avg) and pd.notna(overall_avg) and overall_avg > 0:
-                            adaptation_score = opp_avg / (overall_avg + 0.1)
+                            adaptation_score = opp_avg / overall_avg
                         else:
-                            adaptation_score = 1.0
+                            adaptation_score = np.nan
                         
                         key = f"{player}_{row['Opp']}"
                         adaptation_map[key] = adaptation_score
                     
                     # Aplicar adaptation score
                     df['player_opp_key'] = df['player'] + '_' + df['Opp']
-                    df['opponent_adaptation_score'] = df['player_opp_key'].map(adaptation_map).fillna(1.0)
+                    df['opponent_adaptation_score'] = df['player_opp_key'].map(adaptation_map)
                     df.drop('player_opp_key', axis=1, inplace=False)
                 except Exception as e:
                     logger.warning(f"Error en opponent adaptation: {e}")
-                    df['opponent_adaptation_score'] = 1.0
+                    df['opponent_adaptation_score'] = pd.Series(np.nan, index=df.index)
             else:
-                df['opponent_adaptation_score'] = 1.0
+                df['opponent_adaptation_score'] = pd.Series(np.nan, index=df.index)
